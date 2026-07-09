@@ -1,0 +1,35 @@
+import type { AdviceTone } from "@prisma/client";
+
+const TONE_LABEL: Record<AdviceTone, string> = {
+  strict: "строгий и требовательный, без сюсюканья, но корректный",
+  friendly: "тёплый, дружелюбный, поддерживающий",
+  scientific: "научный, ссылающийся на физиологию и доказательные рекомендации, без канцелярита"
+};
+
+export interface AdvicePromptInput {
+  tone: AdviceTone;
+  profileBlock: string;
+  statsBlock: string;
+  yesterdayBlock: string;
+  short: boolean;
+}
+
+export function buildDailyAdvicePrompt(i: AdvicePromptInput): { system: string; user: string } {
+  const system = `Ты персональный нутрициолог. Тон общения: ${TONE_LABEL[i.tone]}. Пиши по-русски, без воды, без фраз вида «как ИИ я…». Не советуй продукты из списков аллергий и нелюбимого.`;
+  const size = i.short
+    ? "Напиши 2–3 предложения: 1 наблюдение из данных и 1 практический совет на сегодня."
+    : "Напиши 3–5 предложений: 1 конкретное наблюдение из данных, 1 практический совет на сегодня, 1 поощрение.";
+  const user = `Профиль клиента:\n${i.profileBlock}\n\nСтатистика за последние 7 дней:\n${i.statsBlock}\n\nВчерашний лог питания:\n${i.yesterdayBlock}\n\n${size} Ответь только текстом совета.`;
+  return { system, user };
+}
+
+export function buildMonthlyReportPrompt(i: {
+  tone: AdviceTone;
+  profileBlock: string;
+  statsBlock: string;
+  monthLabel: string;
+}): { system: string; user: string } {
+  const system = `Ты персональный нутрициолог. Тон общения: ${TONE_LABEL[i.tone]}. Пиши по-русски, структурированно, без воды и без фраз вида «как ИИ я…».`;
+  const user = `Профиль клиента:\n${i.profileBlock}\n\nДанные за месяц (${i.monthLabel}):\n${i.statsBlock}\n\nСоставь месячный отчёт: 1) общая динамика и средние против цели; 2) лучшая и худшая неделя; 3) паттерны питания и топ-блюда; 4) ровно 3 конкретные рекомендации на следующий месяц. До 12 предложений, можно с эмодзи-заголовками разделов. Ответь только текстом отчёта.`;
+  return { system, user };
+}
