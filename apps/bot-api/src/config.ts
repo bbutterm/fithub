@@ -31,7 +31,16 @@ const envSchema = z.object({
 
   STARS_PRICE_MONTH: z.coerce.number().int().positive().default(250),
   STARS_PRICE_YEAR: z.coerce.number().int().positive().default(1700),
-  FREE_PHOTOS_PER_DAY: z.coerce.number().int().positive().default(3)
+  FREE_PHOTOS_PER_DAY: z.coerce.number().int().positive().default(3),
+
+  // Админка: Telegram ID администраторов через запятую
+  ADMIN_TG_IDS: z.string().optional().default(""),
+  // Учёт расходов: курс и цены токенов (USD за 1M), если провайдер не сообщает стоимость сам
+  USD_RUB_RATE: z.coerce.number().positive().default(90),
+  PRICE_TEXT_INPUT_USD_PER_1M: z.coerce.number().nonnegative().default(0.28),
+  PRICE_TEXT_OUTPUT_USD_PER_1M: z.coerce.number().nonnegative().default(0.42),
+  PRICE_VISION_INPUT_USD_PER_1M: z.coerce.number().nonnegative().default(0.5),
+  PRICE_VISION_OUTPUT_USD_PER_1M: z.coerce.number().nonnegative().default(1.5)
 });
 
 export type AppConfig = ReturnType<typeof loadConfig>;
@@ -55,7 +64,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     s3Enabled: Boolean(c.S3_ENDPOINT),
     jwtSecret: c.JWT_SECRET || createHash("sha256").update(`${c.BOT_TOKEN}:jwt`).digest("hex"),
     // secret_token для проверки, что webhook-запросы приходят именно от Telegram
-    webhookSecret: createHash("sha256").update(`${c.BOT_TOKEN}:webhook`).digest("hex")
+    webhookSecret: createHash("sha256").update(`${c.BOT_TOKEN}:webhook`).digest("hex"),
+    adminTgIds: new Set(
+      c.ADMIN_TG_IDS.split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    )
   };
 }
 

@@ -83,10 +83,13 @@ export async function runMonthlyReportTick(now: Date = new Date()): Promise<void
         monthLabel: range.label
       });
       // Ошибка провайдера ловится ниже — отчёт уйдёт на следующем ежечасном тике.
-      const res = await textClient.chatCompletion([
-        { role: "system", content: prompt.system },
-        { role: "user", content: prompt.user }
-      ]);
+      const res = await textClient.chatCompletion(
+        [
+          { role: "system", content: prompt.system },
+          { role: "user", content: prompt.user }
+        ],
+        { attribution: { userId: user.id, purpose: "monthly" } }
+      );
       const text = res.text.trim();
       if (!text) continue;
 

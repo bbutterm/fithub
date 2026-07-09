@@ -40,7 +40,7 @@ export class NoFoodError extends Error {
 const FALLBACK_CONFIDENCE_THRESHOLD = 0.5;
 
 /** Распознавание еды по фото (data URL) — ТОЛЬКО visionClient, при низком confidence повтор fallback-моделью. */
-export async function recognizeFoodPhoto(imageDataUrl: string): Promise<FoodRecognition & { model: string }> {
+export async function recognizeFoodPhoto(imageDataUrl: string, userId?: number): Promise<FoodRecognition & { model: string }> {
   const messages: ChatMessage[] = [
     { role: "system", content: VISION_SYSTEM_PROMPT },
     {
@@ -52,7 +52,8 @@ export async function recognizeFoodPhoto(imageDataUrl: string): Promise<FoodReco
     }
   ];
 
-  const primary = await visionClient.chatCompletionJson(messages, foodResponseSchema, JSON_RETRY_PROMPT);
+  const attribution = { userId, purpose: "photo" };
+  const primary = await visionClient.chatCompletionJson(messages, foodResponseSchema, JSON_RETRY_PROMPT, { attribution });
   let result = primary.value;
   let usedModel = config.VISION_MODEL;
 
@@ -61,7 +62,8 @@ export async function recognizeFoodPhoto(imageDataUrl: string): Promise<FoodReco
     logger.info({ confidence }, "low confidence, retrying with fallback vision model");
     try {
       const fb = await visionClient.chatCompletionJson(messages, foodResponseSchema, JSON_RETRY_PROMPT, {
-        model: config.VISION_MODEL_FALLBACK
+        model: config.VISION_MODEL_FALLBACK,
+        attribution
       });
       if ((fb.value.overall_confidence ?? 0) > confidence || fb.value.items.length > 0) {
         result = fb.value;
@@ -81,21 +83,22 @@ export async function recognizeFoodPhoto(imageDataUrl: string): Promise<FoodReco
  * Деградация: при 5xx/таймауте text-провайдера разбор временно уходит на visionClient
  * (Qwen умеет текст). Обратной подмены нет: фото ходят только в visionClient.
  */
-export async function recognizeFoodText(description: string): Promise<FoodRecognition & { model: string }> {
+export async function recognizeFoodText(description: string, userId?: number): Promise<FoodRecognition & { model: string }> {
   const messages: ChatMessage[] = [
     { role: "system", content: TEXT_MEAL_SYSTEM_PROMPT },
     { role: "user", content: description }
   ];
+  const attribution = { userId, purpose: "text_meal" };
   let value: FoodRecognition;
   let model: string;
   try {
-    const res = await textClient.chatCompletionJson(messages, foodResponseSchema, JSON_RETRY_PROMPT);
+    const res = await textClient.chatCompletionJson(messages, foodResponseSchema, JSON_RETRY_PROMPT, { attribution });
     value = res.value;
     model = config.TEXT_MODEL;
   } catch (err) {
     if (!(err instanceof AiUnavailableError)) throw err;
     logger.warn({ err: String(err) }, "text provider unavailable, degrading text meal parsing to vision client");
-    const res = await visionClient.chatCompletionJson(messages, foodResponseSchema, JSON_RETRY_PROMPT);
+    const res = await visionClient.chatCompletionJson(messages, foodResponseSchema, JSON_RETRY_PROMPT, { attribution });
     value = res.value;
     model = config.VISION_MODEL;
   }

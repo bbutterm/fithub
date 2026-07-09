@@ -53,6 +53,33 @@ export interface MeResponse {
   profile: Profile | null;
   plan: "free" | "pro";
   subscriptionExpiresAt: string | null;
+  isAdmin: boolean;
+}
+
+// --- Админка ---
+export interface AdminOverview {
+  usdRubRate: number;
+  usersCount: number;
+  activePro: number;
+  mealsCount: number;
+  spend: { totalUsd: number; last30dUsd: number; promptTokens: number; completionTokens: number };
+  byModel: Array<{ client: string; model: string; calls: number; promptTokens: number; completionTokens: number; costUsd: number }>;
+}
+
+export interface AdminUser {
+  id: number;
+  tgUserId: string;
+  firstName: string | null;
+  username: string | null;
+  createdAt: string;
+  plan: "free" | "pro";
+  proExpiresAt: string | null;
+  dailyLimitOverride: number | null;
+  mealsCount: number;
+  aiCalls: number;
+  tokens: number;
+  costUsd: number;
+  isAdmin: boolean;
 }
 
 export interface AnalyticsResponse {
