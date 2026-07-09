@@ -1,0 +1,20 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "pnpm install",
+  "buildCommand": "pnpm --filter bot-api prisma:generate && pnpm --filter webapp build",
+  "outputDirectory": "apps/webapp/dist",
+  "functions": {
+    "api/index.ts": {
+      "maxDuration": 60,
+      "memory": 1024
+    }
+  },
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/index" },
+    { "source": "/health", "destination": "/api/index" }
+  ],
+  "crons": [
+    { "path": "/api/cron/advice", "schedule": "0 6 * * *" },
+    { "path": "/api/cron/daily", "schedule": "0 8 * * *" }
+  ]
+}

@@ -1,0 +1,170 @@
+generator client {
+  provider      = "prisma-client-js"
+  // native — локальная разработка; rhel-openssl-3.0.x — serverless-функции Vercel
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // Supabase: pooled-строка (порт 6543, pgbouncer=true)
+  directUrl = env("DIRECT_URL") // Supabase: прямое подключение (порт 5432) для миграций
+}
+
+model User {
+  id            Int            @id @default(autoincrement())
+  tgUserId      BigInt         @unique
+  firstName     String?
+  username      String?
+  tz            String         @default("Europe/Moscow")
+  createdAt     DateTime       @default(now())
+  profile       Profile?
+  meals         Meal[]
+  advices       DailyAdvice[]
+  subscriptions Subscription[]
+  usage         UsageCounter[]
+}
+
+enum Gender {
+  male
+  female
+}
+
+enum ActivityLevel {
+  sedentary
+  light
+  moderate
+  high
+}
+
+enum Goal {
+  lose
+  maintain
+  gain
+}
+
+enum DietType {
+  none
+  vegetarian
+  vegan
+  keto
+  halal
+}
+
+enum AdviceTone {
+  strict
+  friendly
+  scientific
+}
+
+model Profile {
+  userId        Int           @id
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gender        Gender        @default(male)
+  birthYear     Int?
+  heightCm      Int?
+  weightKg      Float?
+  activityLevel ActivityLevel @default(moderate)
+  goal          Goal          @default(maintain)
+  dietType      DietType      @default(none)
+  allergies     String[]      @default([])
+  dislikes      String[]      @default([])
+  targetKcal    Int?
+  targetProtein Int?
+  targetFat     Int?
+  targetCarbs   Int?
+  adviceTone    AdviceTone    @default(friendly)
+  adviceTime    String        @default("09:00")
+  adviceEnabled Boolean       @default(true)
+  updatedAt     DateTime      @updatedAt
+}
+
+enum MealSource {
+  photo
+  text
+  manual
+}
+
+model Meal {
+  id                Int        @id @default(autoincrement())
+  userId            Int
+  user              User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  photoFileId       String?
+  photoS3Key        String?
+  eatenAt           DateTime   @default(now())
+  totalKcal         Float      @default(0)
+  totalProtein      Float      @default(0)
+  totalFat          Float      @default(0)
+  totalCarbs        Float      @default(0)
+  aiComment         String?
+  overallConfidence Float?
+  source            MealSource
+  items             MealItem[]
+
+  @@index([userId, eatenAt])
+}
+
+model MealItem {
+  id         Int    @id @default(autoincrement())
+  mealId     Int
+  meal       Meal   @relation(fields: [mealId], references: [id], onDelete: Cascade)
+  dish       String
+  grams      Float
+  kcal       Float
+  protein    Float
+  fat        Float
+  carbs      Float
+  confidence Float  @default(1)
+}
+
+enum AdviceKind {
+  daily
+  monthly
+}
+
+model DailyAdvice {
+  id         Int        @id @default(autoincrement())
+  userId     Int
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date       String // локальная дата пользователя YYYY-MM-DD (для monthly — YYYY-MM-01 отчётного месяца)
+  kind       AdviceKind @default(daily)
+  adviceText String
+  statsJson  Json
+  createdAt  DateTime   @default(now())
+
+  @@unique([userId, date, kind])
+  @@index([userId, kind])
+}
+
+enum Plan {
+  free
+  pro
+}
+
+enum SubscriptionStatus {
+  active
+  expired
+  canceled
+}
+
+model Subscription {
+  id             Int                @id @default(autoincrement())
+  userId         Int
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan           Plan
+  status         SubscriptionStatus @default(active)
+  startedAt      DateTime           @default(now())
+  expiresAt      DateTime
+  starsPaymentId String?
+
+  @@index([userId, status])
+  @@index([status, expiresAt])
+}
+
+model UsageCounter {
+  userId     Int
+  user       User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date       String // локальная дата пользователя YYYY-MM-DD
+  photoCount Int    @default(0)
+
+  @@id([userId, date])
+}

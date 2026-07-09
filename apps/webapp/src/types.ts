@@ -1,0 +1,73 @@
+export interface MealItem {
+  id: number;
+  dish: string;
+  grams: number;
+  kcal: number;
+  protein: number;
+  fat: number;
+  carbs: number;
+  confidence: number;
+}
+
+export interface Meal {
+  id: number;
+  eatenAt: string;
+  totalKcal: number;
+  totalProtein: number;
+  totalFat: number;
+  totalCarbs: number;
+  aiComment: string | null;
+  overallConfidence: number | null;
+  source: string;
+  hasPhoto: boolean;
+  items: MealItem[];
+}
+
+export interface DayResponse {
+  date: string;
+  totals: { totalKcal: number; totalProtein: number; totalFat: number; totalCarbs: number };
+  meals: Meal[];
+}
+
+export interface Profile {
+  gender: "male" | "female";
+  birthYear: number | null;
+  heightCm: number | null;
+  weightKg: number | null;
+  activityLevel: "sedentary" | "light" | "moderate" | "high";
+  goal: "lose" | "maintain" | "gain";
+  dietType: "none" | "vegetarian" | "vegan" | "keto" | "halal";
+  allergies: string[];
+  dislikes: string[];
+  targetKcal: number | null;
+  targetProtein: number | null;
+  targetFat: number | null;
+  targetCarbs: number | null;
+  adviceTone: "strict" | "friendly" | "scientific";
+  adviceTime: string;
+  adviceEnabled: boolean;
+}
+
+export interface MeResponse {
+  user: { id: number; firstName: string | null; tz: string };
+  profile: Profile | null;
+  plan: "free" | "pro";
+  subscriptionExpiresAt: string | null;
+}
+
+export interface AnalyticsResponse {
+  period: "week" | "month";
+  days: Array<{ date: string; kcal: number; protein: number; fat: number; carbs: number; mealsCount: number }>;
+  averages: { kcal: number; protein: number; fat: number; carbs: number };
+  targets: { kcal: number | null; protein: number | null; fat: number | null; carbs: number | null };
+  streak: number;
+  monthlyInsight: { date: string; text: string } | null;
+}
+
+export interface SubscriptionResponse {
+  plan: "free" | "pro";
+  expiresAt: string | null;
+  prices: { month: number; year: number };
+  freeLimit: number;
+  usedToday: number;
+}
