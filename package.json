@@ -1,7 +1,7 @@
 {
   "name": "fithub",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "ИИ-нутрициолог: Telegram-бот + Mini App",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
