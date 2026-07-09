@@ -133,6 +133,15 @@ export async function buildServer() {
     await runSubscriptionExpiryTick();
     return { ok: true };
   });
+  // Комбинированный ежедневный тик для планов с лимитом cron-задач (Vercel Hobby):
+  // месячные отчёты + деактивация подписок одним вызовом.
+  app.get("/api/cron/daily", { preHandler: cronAuth }, async () => {
+    const { runMonthlyReportTick } = await import("../cron/monthlyReport.js");
+    const { runSubscriptionExpiryTick } = await import("../cron/subscriptions.js");
+    await runSubscriptionExpiryTick();
+    await runMonthlyReportTick();
+    return { ok: true };
+  });
 
   const authenticate = async (request: FastifyRequest, reply: FastifyReply) => {
     try {
