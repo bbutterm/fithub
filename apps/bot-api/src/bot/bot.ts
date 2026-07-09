@@ -36,7 +36,7 @@ const START_TEXT = [
 
 async function handleRecognition(params: {
   ctx: Context;
-  recognize: () => Promise<FoodRecognition>;
+  recognize: (userId: number) => Promise<FoodRecognition>;
   source: "photo" | "text";
   photoFileId?: string;
 }): Promise<void> {
@@ -69,7 +69,7 @@ async function handleRecognition(params: {
 
   const status = await ctx.reply("Секунду, смотрю… 👀");
   try {
-    const recognition = await params.recognize();
+    const recognition = await params.recognize(user.id);
     await incrementRecognitionCount(user);
     const meal = await createMealFromRecognition({
       userId: user.id,
@@ -153,14 +153,14 @@ bot.on("message:photo", async (ctx) => {
     ctx,
     source: "photo",
     photoFileId: largest.file_id,
-    recognize: async () => recognizeFoodPhoto(await telegramFileToDataUrl(largest.file_id))
+    recognize: async (userId) => recognizeFoodPhoto(await telegramFileToDataUrl(largest.file_id), userId)
   });
 });
 
 bot.on("message:text", async (ctx) => {
   const text = ctx.message.text.trim();
   if (text.startsWith("/") || text.length < 3) return;
-  await handleRecognition({ ctx, source: "text", recognize: () => recognizeFoodText(text) });
+  await handleRecognition({ ctx, source: "text", recognize: (userId) => recognizeFoodText(text, userId) });
 });
 
 bot.catch((err) => {

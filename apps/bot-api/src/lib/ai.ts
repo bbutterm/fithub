@@ -4,6 +4,7 @@
 import { z } from "zod";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
+import { prisma } from "../db.js";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const RETRY_BASE_PAUSE_MS = 1_000;
@@ -21,6 +22,8 @@ export interface CompletionOptions {
   model?: string; // переопределение модели (fallback-модель vision)
   maxTokens?: number;
   timeoutMs?: number;
+  // Атрибуция вызова для учёта расходов в админке
+  attribution?: { userId?: number; purpose: string };
 }
 
 export interface CompletionResult {
@@ -108,10 +111,40 @@ export class AiClient {
         cost: data.usage?.cost
       };
       logger.info({ client: this.name, model, latencyMs, usage }, "ai call");
+      this.recordUsage(model, usage, opts.attribution);
       return { text: data.choices[0]?.message.content ?? "", usage, latencyMs, model };
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /** Стоимость вызова: цена от провайдера, если сообщил (OpenRouter), иначе по тарифам из конфига. */
+  private calcCostUsd(usage: { promptTokens: number; completionTokens: number; cost?: number }): number {
+    if (usage.cost !== undefined) return usage.cost;
+    const inPrice = this.name === "vision" ? config.PRICE_VISION_INPUT_USD_PER_1M : config.PRICE_TEXT_INPUT_USD_PER_1M;
+    const outPrice = this.name === "vision" ? config.PRICE_VISION_OUTPUT_USD_PER_1M : config.PRICE_TEXT_OUTPUT_USD_PER_1M;
+    return (usage.promptTokens / 1e6) * inPrice + (usage.completionTokens / 1e6) * outPrice;
+  }
+
+  /** Запись расхода в БД для админки (fire-and-forget, ошибки не роняют запрос). */
+  private recordUsage(
+    model: string,
+    usage: { promptTokens: number; completionTokens: number; cost?: number },
+    attribution?: { userId?: number; purpose: string }
+  ): void {
+    void prisma.aiUsage
+      .create({
+        data: {
+          userId: attribution?.userId ?? null,
+          client: this.name,
+          model,
+          purpose: attribution?.purpose ?? "other",
+          promptTokens: usage.promptTokens,
+          completionTokens: usage.completionTokens,
+          costUsd: this.calcCostUsd(usage)
+        }
+      })
+      .catch((err) => logger.warn({ err: String(err) }, "ai usage record failed"));
   }
 
   /** Вызов с 1 ретраем (экспоненциальная пауза) при таймауте/5xx/сетевой ошибке. */

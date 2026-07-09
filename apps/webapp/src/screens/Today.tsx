@@ -7,9 +7,10 @@ import { MealDetail } from "./MealDetail";
 interface Props {
   profile: Profile | null;
   initialMealId?: number;
+  userName?: string | null;
 }
 
-export function Today({ profile, initialMealId }: Props) {
+export function Today({ profile, initialMealId, userName }: Props) {
   const [day, setDay] = useState<DayResponse | null>(null);
   const [openMeal, setOpenMeal] = useState<number | null>(initialMealId ?? null);
   const [loading, setLoading] = useState(true);
@@ -27,10 +28,14 @@ export function Today({ profile, initialMealId }: Props) {
   const t = day?.totals;
   const timeFmt = new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" });
 
+  const dateLabel = day?.date
+    ? new Intl.DateTimeFormat("ru-RU", { weekday: "long", day: "numeric", month: "long" }).format(new Date(`${day.date}T12:00:00`))
+    : "";
+
   return (
     <div className="screen">
-      <h1>Сегодня</h1>
-      <p className="hint mb">{day?.date ?? ""}</p>
+      <h1>{userName ? `Привет, ${userName}! 👋` : "Сегодня"}</h1>
+      <p className="hint mb" style={{ textTransform: "capitalize" }}>{dateLabel}</p>
 
       <div className="card">
         <div className="rings">

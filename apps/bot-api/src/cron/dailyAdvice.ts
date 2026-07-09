@@ -48,10 +48,13 @@ export async function runDailyAdviceTick(now: Date = new Date()): Promise<void> 
       });
       // При недоступности text-провайдера ошибка ловится ниже,
       // запись в DailyAdvice не создаётся — совет уйдёт на следующем cron-тике.
-      const res = await textClient.chatCompletion([
-        { role: "system", content: prompt.system },
-        { role: "user", content: prompt.user }
-      ]);
+      const res = await textClient.chatCompletion(
+        [
+          { role: "system", content: prompt.system },
+          { role: "user", content: prompt.user }
+        ],
+        { attribution: { userId: user.id, purpose: "advice" } }
+      );
       const text = res.text.trim();
       if (!text) continue;
 

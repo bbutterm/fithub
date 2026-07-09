@@ -1,5 +1,5 @@
 import { getRawInitData } from "./telegram";
-import type { AnalyticsResponse, DayResponse, Meal, MeResponse, Profile, SubscriptionResponse } from "./types";
+import type { AdminOverview, AdminUser, AnalyticsResponse, DayResponse, Meal, MeResponse, Profile, SubscriptionResponse } from "./types";
 
 let token: string | null = null;
 
@@ -16,7 +16,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     ...options,
     headers: {
-      "Content-Type": "application/json",
+      // Content-Type только при наличии тела: Fastify отвечает 400 на
+      // "application/json" с пустым body (ломались DELETE-запросы)
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers ?? {})
     }
@@ -73,5 +75,16 @@ export const api = {
   analytics: (period: "week" | "month") => request<AnalyticsResponse>(`/api/analytics?period=${period}`),
   subscription: () => request<SubscriptionResponse>("/api/subscription"),
   invoice: (plan: "month" | "year") =>
-    request<{ link: string }>("/api/subscription/invoice", { method: "POST", body: JSON.stringify({ plan }) })
+    request<{ link: string }>("/api/subscription/invoice", { method: "POST", body: JSON.stringify({ plan }) }),
+
+  admin: {
+    overview: () => request<AdminOverview>("/api/admin/overview"),
+    users: (query?: string) =>
+      request<{ users: AdminUser[]; usdRubRate: number }>(`/api/admin/users${query ? `?query=${encodeURIComponent(query)}` : ""}`),
+    grantPro: (userId: number, days: number) =>
+      request<{ ok: boolean; expiresAt: string }>(`/api/admin/users/${userId}/pro`, { method: "POST", body: JSON.stringify({ days }) }),
+    revokePro: (userId: number) => request<{ ok: boolean }>(`/api/admin/users/${userId}/pro`, { method: "DELETE" }),
+    setLimit: (userId: number, limit: number | null) =>
+      request<{ ok: boolean }>(`/api/admin/users/${userId}/limit`, { method: "POST", body: JSON.stringify({ limit }) })
+  }
 };

@@ -11,17 +11,36 @@ datasource db {
 }
 
 model User {
-  id            Int            @id @default(autoincrement())
-  tgUserId      BigInt         @unique
-  firstName     String?
-  username      String?
-  tz            String         @default("Europe/Moscow")
-  createdAt     DateTime       @default(now())
-  profile       Profile?
-  meals         Meal[]
-  advices       DailyAdvice[]
-  subscriptions Subscription[]
-  usage         UsageCounter[]
+  id                 Int            @id @default(autoincrement())
+  tgUserId           BigInt         @unique
+  firstName          String?
+  username           String?
+  tz                 String         @default("Europe/Moscow")
+  createdAt          DateTime       @default(now())
+  dailyLimitOverride Int? // персональный лимит распознаваний/день для free (админка)
+  profile            Profile?
+  meals              Meal[]
+  advices            DailyAdvice[]
+  subscriptions      Subscription[]
+  usage              UsageCounter[]
+  aiUsage            AiUsage[]
+}
+
+// Учёт каждого вызова ИИ: токены и стоимость (для админки)
+model AiUsage {
+  id               Int      @id @default(autoincrement())
+  userId           Int?
+  user             User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  client           String // vision | text
+  model            String
+  purpose          String // photo | text_meal | advice | monthly | probe | json_retry
+  promptTokens     Int      @default(0)
+  completionTokens Int      @default(0)
+  costUsd          Float    @default(0)
+  createdAt        DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
 }
 
 enum Gender {

@@ -19,7 +19,9 @@ export async function checkRecognitionLimit(user: User): Promise<LimitCheck> {
     where: { userId_date: { userId: user.id, date } }
   });
   const used = counter?.photoCount ?? 0;
-  return { allowed: used < config.FREE_PHOTOS_PER_DAY, used, limit: config.FREE_PHOTOS_PER_DAY };
+  // Персональный лимит из админки имеет приоритет над общим free-лимитом
+  const limit = user.dailyLimitOverride ?? config.FREE_PHOTOS_PER_DAY;
+  return { allowed: used < limit, used, limit };
 }
 
 export async function incrementRecognitionCount(user: User): Promise<void> {

@@ -14,6 +14,7 @@ import { calcStreak, getDailyStats } from "../services/stats.js";
 import { getActiveSubscription, getPlan } from "../services/subscription.js";
 import { NoFoodError, recognizeFoodText } from "../ai/food.js";
 import { probeProvidersOnce } from "../lib/ai.js";
+import { isAdminTgId, registerAdminRoutes } from "./admin.js";
 import { downloadTelegramFile } from "../services/tgfiles.js";
 import { checkRecognitionLimit, incrementRecognitionCount } from "../services/limits.js";
 import { localDateStr } from "../utils/tz.js";
@@ -203,7 +204,8 @@ export async function buildServer() {
       user: { id: user.id, firstName: user.firstName, tz: user.tz },
       profile: profile ? serializeProfile(profile) : null,
       plan,
-      subscriptionExpiresAt: sub?.expiresAt.toISOString() ?? null
+      subscriptionExpiresAt: sub?.expiresAt.toISOString() ?? null,
+      isAdmin: isAdminTgId(user.tgUserId)
     };
   });
 
@@ -303,7 +305,7 @@ export async function buildServer() {
     const limit = await checkRecognitionLimit(user);
     if (!limit.allowed) return reply.code(402).send({ error: "limit_reached", limit: limit.limit });
     try {
-      const recognition = await recognizeFoodText(body.data.text);
+      const recognition = await recognizeFoodText(body.data.text, uid);
       await incrementRecognitionCount(user);
       const updated = await addItemsToMeal(meal.id, recognition);
       return { meal: serializeMeal(updated) };
@@ -385,6 +387,9 @@ export async function buildServer() {
       usedToday: usage?.photoCount ?? 0
     };
   });
+
+  // приведение типа: инстанс с кастомным pino-логгером совместим по используемым методам
+  registerAdminRoutes(app as unknown as Parameters<typeof registerAdminRoutes>[0], authenticate);
 
   app.post("/api/subscription/invoice", { preHandler: authenticate }, async (request, reply) => {
     const body = z.object({ plan: z.enum(["month", "year"]) }).safeParse(request.body);

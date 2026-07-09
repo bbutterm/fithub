@@ -7,8 +7,9 @@ import { Today } from "./screens/Today";
 import { Analytics } from "./screens/Analytics";
 import { Settings } from "./screens/Settings";
 import { Subscription } from "./screens/Subscription";
+import { Admin } from "./screens/Admin";
 
-type Tab = "today" | "analytics" | "settings" | "subscription";
+type Tab = "today" | "analytics" | "settings" | "subscription" | "admin";
 
 function initialRoute(): { tab: Tab; mealId?: number } {
   const url = new URL(window.location.href);
@@ -26,6 +27,8 @@ export default function App() {
   const [state, setState] = useState<"loading" | "error" | "onboarding" | "ready">("loading");
   const [profile, setProfile] = useState<Profile | null>(null);
   const [plan, setPlan] = useState<"free" | "pro">("free");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [userName, setUserName] = useState<string | null>(null);
   const [route] = useState(initialRoute);
   const [tab, setTab] = useState<Tab>(route.tab);
 
@@ -33,6 +36,7 @@ export default function App() {
     (async () => {
       try {
         const auth = await authorize();
+        setUserName(auth.user.firstName);
         if (!auth.hasProfile) {
           setState("onboarding");
           return;
@@ -40,6 +44,7 @@ export default function App() {
         const me = await api.me();
         setProfile(me.profile);
         setPlan(me.plan);
+        setIsAdmin(me.isAdmin);
         setState("ready");
       } catch {
         setState("error");
@@ -79,10 +84,11 @@ export default function App() {
 
   return (
     <>
-      {tab === "today" && <Today profile={profile} initialMealId={route.mealId} />}
+      {tab === "today" && <Today profile={profile} initialMealId={route.mealId} userName={userName} />}
       {tab === "analytics" && <Analytics plan={plan} onGoPro={() => setTab("subscription")} />}
       {tab === "settings" && profile && <Settings profile={profile} onSaved={setProfile} />}
       {tab === "subscription" && <Subscription />}
+      {tab === "admin" && isAdmin && <Admin />}
 
       <nav className="tabbar">
         {(
@@ -90,7 +96,8 @@ export default function App() {
             ["today", "🍽", "Сегодня"],
             ["analytics", "📈", "Аналитика"],
             ["settings", "⚙️", "Настройки"],
-            ["subscription", "⭐", "Pro"]
+            ["subscription", "⭐", "Pro"],
+            ...(isAdmin ? [["admin", "🛡", "Админ"] as [Tab, string, string]] : [])
           ] as Array<[Tab, string, string]>
         ).map(([id, icon, label]) => (
           <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
