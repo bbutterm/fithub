@@ -133,6 +133,20 @@ export async function buildServer() {
     await runSubscriptionExpiryTick();
     return { ok: true };
   });
+  // Разовая настройка: регистрация Telegram-webhook на WEBAPP_URL/api/tg-webhook.
+  // Вызов: GET /api/setup-webhook?key=<CRON_SECRET>
+  app.get("/api/setup-webhook", async (request, reply) => {
+    const key = (request.query as { key?: string }).key;
+    if (!config.CRON_SECRET || key !== config.CRON_SECRET) {
+      return reply.code(401).send({ error: "unauthorized" });
+    }
+    const url = `${config.WEBAPP_URL}/api/tg-webhook`;
+    await bot.api.setWebhook(url, { secret_token: config.webhookSecret });
+    const info = await bot.api.getWebhookInfo();
+    const me = await bot.api.getMe();
+    return { ok: true, bot: me.username, webhook: info.url, pendingUpdates: info.pending_update_count };
+  });
+
   // Комбинированный ежедневный тик для планов с лимитом cron-задач (Vercel Hobby):
   // месячные отчёты + деактивация подписок одним вызовом.
   app.get("/api/cron/daily", { preHandler: cronAuth }, async () => {
