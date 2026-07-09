@@ -10,7 +10,10 @@ interface TelegramWebApp {
   expand?: () => void;
   ready?: () => void;
   openInvoice?: (url: string, cb?: (status: string) => void) => void;
-  HapticFeedback?: { notificationOccurred?: (type: "error" | "success" | "warning") => void };
+  HapticFeedback?: {
+    notificationOccurred?: (type: "error" | "success" | "warning") => void;
+    impactOccurred?: (style: "light" | "medium" | "heavy" | "rigid" | "soft") => void;
+  };
 }
 
 declare global {
@@ -66,6 +69,17 @@ export function openInvoice(url: string, onPaid: () => void): void {
     });
   } else {
     window.open(url, "_blank");
+  }
+}
+
+/** Тактильный отклик на действия (безопасно вне Telegram — просто no-op). */
+export function haptic(type: "light" | "success" | "error" | "warning" = "light"): void {
+  try {
+    const h = webApp()?.HapticFeedback;
+    if (type === "light") h?.impactOccurred?.("light");
+    else h?.notificationOccurred?.(type);
+  } catch {
+    /* noop */
   }
 }
 

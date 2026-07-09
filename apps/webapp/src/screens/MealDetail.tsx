@@ -115,9 +115,15 @@ export function MealDetail({ mealId, onClose }: Props) {
                     Удалить
                   </button>
                 </div>
-                <p className="hint small">
-                  {r0(grams[it.id] ?? it.grams)} г · {r0(it.kcal)} ккал · Б {r0(it.protein)} / Ж {r0(it.fat)} / У {r0(it.carbs)}
-                </p>
+                {(() => {
+                  // Живой пересчёт при перетаскивании слайдера — сервер догоняет на отпускании
+                  const k = it.grams > 0 ? (grams[it.id] ?? it.grams) / it.grams : 0;
+                  return (
+                    <p className="hint small">
+                      {r0(grams[it.id] ?? it.grams)} г · <b>{r0(it.kcal * k)} ккал</b> · Б {r0(it.protein * k)} / Ж {r0(it.fat * k)} / У {r0(it.carbs * k)}
+                    </p>
+                  );
+                })()}
                 <input
                   type="range"
                   min={10}

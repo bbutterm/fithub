@@ -9,6 +9,7 @@ export async function createMealFromRecognition(params: {
   recognition: FoodRecognition;
   source: MealSource;
   photoFileId?: string;
+  photoThumbFileId?: string;
   eatenAt?: Date;
 }) {
   const items = params.recognition.items.map((i) => ({
@@ -26,6 +27,7 @@ export async function createMealFromRecognition(params: {
       userId: params.userId,
       source: params.source,
       photoFileId: params.photoFileId,
+      photoThumbFileId: params.photoThumbFileId,
       eatenAt: params.eatenAt ?? new Date(),
       aiComment: params.recognition.comment ?? null,
       overallConfidence: params.recognition.overall_confidence ?? null,

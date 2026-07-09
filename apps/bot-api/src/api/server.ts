@@ -55,6 +55,7 @@ function serializeProfile(p: NonNullable<Awaited<ReturnType<typeof prisma.profil
 
 function serializeMeal(m: {
   id: number;
+  photoThumbFileId?: string | null;
   eatenAt: Date;
   totalKcal: number;
   totalProtein: number;
@@ -230,11 +231,18 @@ export async function buildServer() {
 
     const user = await upsertUserFromTelegram(validated.user);
     const token = app.jwt.sign({ uid: user.id });
-    const profile = await prisma.profile.findUnique({ where: { userId: user.id } });
+    // Возвращаем сразу всё, что нужно для старта Mini App — экономим roundtrip к /api/me
+    const [profile, plan] = await Promise.all([
+      prisma.profile.findUnique({ where: { userId: user.id } }),
+      getPlan(user.id)
+    ]);
     return {
       token,
       user: { id: user.id, firstName: user.firstName, tz: user.tz },
-      hasProfile: Boolean(profile)
+      hasProfile: Boolean(profile),
+      profile: profile ? serializeProfile(profile) : null,
+      plan,
+      isAdmin: isAdminTgId(user.tgUserId)
     };
   });
 
@@ -369,13 +377,19 @@ export async function buildServer() {
   });
 
   // --- Фото-прокси (S3 не используется: отдаём файл Telegram через backend) ---
+  // ?thumb=1 — маленький размер для превью в ленте (в разы быстрее и дешевле по трафику)
   app.get("/api/photos/:mealId", { preHandler: authenticate }, async (request, reply) => {
     const mealId = Number((request.params as { mealId: string }).mealId);
+    const wantThumb = (request.query as { thumb?: string }).thumb === "1";
     const meal = await getMealForUser(mealId, request.user.uid);
     if (!meal?.photoFileId) return reply.code(404).send({ error: "not_found" });
+    const fileId = wantThumb && meal.photoThumbFileId ? meal.photoThumbFileId : meal.photoFileId;
     try {
-      const { buffer, contentType } = await downloadTelegramFile(meal.photoFileId);
-      return reply.header("Content-Type", contentType).header("Cache-Control", "private, max-age=1800").send(buffer);
+      const { buffer, contentType } = await downloadTelegramFile(fileId);
+      return reply
+        .header("Content-Type", contentType)
+        .header("Cache-Control", "private, max-age=86400, immutable")
+        .send(buffer);
     } catch {
       return reply.code(502).send({ error: "photo_unavailable" });
     }

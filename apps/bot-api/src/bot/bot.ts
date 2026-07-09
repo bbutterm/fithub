@@ -46,6 +46,7 @@ async function handleRecognition(params: {
   recognize: (userId: number) => Promise<FoodRecognition>;
   source: "photo" | "text";
   photoFileId?: string;
+  photoThumbFileId?: string;
 }): Promise<void> {
   const { ctx } = params;
   if (!ctx.from || !ctx.chat) return;
@@ -87,7 +88,8 @@ async function handleRecognition(params: {
       userId: user.id,
       recognition,
       source: params.source,
-      photoFileId: params.photoFileId
+      photoFileId: params.photoFileId,
+      photoThumbFileId: params.photoThumbFileId
     });
     const profile = await prisma.profile.findUnique({ where: { userId: user.id } });
     const day = await getDay(user.id, localDateStr(user.tz), user.tz);
@@ -163,11 +165,14 @@ bot.on("message:photo", async (ctx) => {
   const largest = photos[photos.length - 1];
   if (!largest) return;
   const caption = ctx.message.caption?.trim();
+  // Маленький размер (~320px) — для быстрых превью в ленте Mini App
+  const thumb = photos.find((p) => p.width >= 250 && p.width <= 500) ?? photos[0];
   const { telegramFileToDataUrl } = await import("../services/tgfiles.js");
   await handleRecognition({
     ctx,
     source: "photo",
     photoFileId: largest.file_id,
+    photoThumbFileId: thumb?.file_id,
     // Подпись к фото — подсказка модели: название берём из неё, КБЖУ оцениваем по фото
     recognize: async (userId) => recognizeFoodPhoto(await telegramFileToDataUrl(largest.file_id), userId, caption)
   });

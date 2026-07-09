@@ -108,6 +108,7 @@ model Meal {
   userId            Int
   user              User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   photoFileId       String?
+  photoThumbFileId  String? // маленький размер фото Telegram — для быстрых превью в ленте
   photoS3Key        String?
   eatenAt           DateTime   @default(now())
   totalKcal         Float      @default(0)

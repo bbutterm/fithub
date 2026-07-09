@@ -22,7 +22,7 @@ export function BarChart({ days, target }: Props) {
       </div>
       {target ? (
         <div className="hint small mt">
-          Цель: {target} ккал/день · <span style={{ color: "var(--warn)" }}>оранжевые</span> дни — превышение
+          Цель: {target} ккал/день · <span style={{ color: "var(--over)", fontWeight: 600 }}>красные</span> дни — превышение
         </div>
       ) : null}
     </div>

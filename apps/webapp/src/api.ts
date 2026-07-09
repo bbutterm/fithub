@@ -40,6 +40,9 @@ export interface AuthResult {
   token: string;
   user: { id: number; firstName: string | null; tz: string };
   hasProfile: boolean;
+  profile: Profile | null;
+  plan: "free" | "pro";
+  isAdmin: boolean;
 }
 
 export async function authorize(): Promise<AuthResult> {
@@ -52,8 +55,8 @@ export async function authorize(): Promise<AuthResult> {
   return res;
 }
 
-export function photoUrl(mealId: number): string {
-  return `/api/photos/${mealId}?token=${encodeURIComponent(token ?? "")}`;
+export function photoUrl(mealId: number, thumb = false): string {
+  return `/api/photos/${mealId}?token=${encodeURIComponent(token ?? "")}${thumb ? "&thumb=1" : ""}`;
 }
 
 export const api = {
