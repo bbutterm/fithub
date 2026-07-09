@@ -25,6 +25,7 @@ const START_TEXT = [
   "Привет! Я твой ИИ-нутрициолог 🥑",
   "",
   "<b>Просто пришли мне фото еды</b> — я определю блюда, посчитаю калории и БЖУ и запишу в дневник.",
+  "💡 Подпиши фото названием блюда — распознавание будет точнее.",
   "Можно и текстом: «тарелка борща и два куска хлеба».",
   "",
   "Команды:",
@@ -148,12 +149,14 @@ bot.on("message:photo", async (ctx) => {
   const photos = ctx.message.photo;
   const largest = photos[photos.length - 1];
   if (!largest) return;
+  const caption = ctx.message.caption?.trim();
   const { telegramFileToDataUrl } = await import("../services/tgfiles.js");
   await handleRecognition({
     ctx,
     source: "photo",
     photoFileId: largest.file_id,
-    recognize: async (userId) => recognizeFoodPhoto(await telegramFileToDataUrl(largest.file_id), userId)
+    // Подпись к фото — подсказка модели: название берём из неё, КБЖУ оцениваем по фото
+    recognize: async (userId) => recognizeFoodPhoto(await telegramFileToDataUrl(largest.file_id), userId, caption)
   });
 });
 

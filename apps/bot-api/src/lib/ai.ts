@@ -11,7 +11,10 @@ const RETRY_BASE_PAUSE_MS = 1_000;
 
 export type ChatContent =
   | string
-  | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
+  | Array<
+      | { type: "text"; text: string }
+      | { type: "image_url"; image_url: { url: string; detail?: "low" | "high" | "auto" } }
+    >;
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
