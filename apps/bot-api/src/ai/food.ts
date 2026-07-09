@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
-import { JSON_RETRY_PROMPT, TEXT_MEAL_SYSTEM_PROMPT, VISION_SYSTEM_PROMPT } from "../prompts/vision.js";
+import { buildPhotoHint, JSON_RETRY_PROMPT, TEXT_MEAL_SYSTEM_PROMPT, VISION_SYSTEM_PROMPT } from "../prompts/vision.js";
 import { AiUnavailableError, textClient, visionClient, type ChatMessage } from "../lib/ai.js";
 
 const foodItemSchema = z.object({
@@ -15,6 +15,7 @@ const foodItemSchema = z.object({
 });
 
 const foodResponseSchema = z.object({
+  observed: z.string().optional(), // «рассуждение» модели: что видно на фото — улучшает точность
   items: z.array(foodItemSchema).default([]),
   total: z
     .object({
@@ -37,17 +38,23 @@ export class NoFoodError extends Error {
   }
 }
 
-const FALLBACK_CONFIDENCE_THRESHOLD = 0.5;
+const FALLBACK_CONFIDENCE_THRESHOLD = 0.7;
 
 /** Распознавание еды по фото (data URL) — ТОЛЬКО visionClient, при низком confidence повтор fallback-моделью. */
-export async function recognizeFoodPhoto(imageDataUrl: string, userId?: number): Promise<FoodRecognition & { model: string }> {
+export async function recognizeFoodPhoto(
+  imageDataUrl: string,
+  userId?: number,
+  captionHint?: string
+): Promise<FoodRecognition & { model: string }> {
+  const userText = captionHint?.trim() ? buildPhotoHint(captionHint.trim()) : "Проанализируй фото еды.";
   const messages: ChatMessage[] = [
     { role: "system", content: VISION_SYSTEM_PROMPT },
     {
       role: "user",
       content: [
-        { type: "text", text: "Проанализируй фото еды." },
-        { type: "image_url", image_url: { url: imageDataUrl } }
+        { type: "text", text: userText },
+        // detail: high — модель получает фото в полном разрешении, а не сжатую превьюшку
+        { type: "image_url", image_url: { url: imageDataUrl, detail: "high" } }
       ]
     }
   ];
