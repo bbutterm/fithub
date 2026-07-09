@@ -82,15 +82,34 @@ function serializeMeal(m: {
 }
 
 /**
- * Продолжить фоновую работу после отправки HTTP-ответа.
- * На Vercel лямбда замораживается сразу после ответа — waitUntil из request context
- * (тот же механизм, что в @vercel/functions) держит её живой до завершения промиса.
- * Локально (long polling / обычный Node) контекста нет — промис просто доработает сам.
+ * waitUntil из request context Vercel (тот же механизм, что в @vercel/functions):
+ * позволяет продолжить работу после отправки HTTP-ответа. Доступен не во всех
+ * рантаймах — если его нет, webhook обрабатывается синхронно.
  */
-function scheduleBackgroundWork(work: Promise<unknown>): void {
+function getWaitUntil(): ((p: Promise<unknown>) => void) | undefined {
   const sym = Symbol.for("@vercel/request-context");
   const store = (globalThis as unknown as Record<symbol, { get?: () => { waitUntil?: (p: Promise<unknown>) => void } } | undefined>)[sym];
-  store?.get?.()?.waitUntil?.(work);
+  const waitUntil = store?.get?.()?.waitUntil;
+  return typeof waitUntil === "function" ? waitUntil : undefined;
+}
+
+// Межинстансовая дедупликация update_id через БД (таблица создаётся сама, миграция не нужна)
+let dedupeTableReady = false;
+async function isDuplicateUpdate(updateId: number): Promise<boolean> {
+  try {
+    if (!dedupeTableReady) {
+      await prisma.$executeRawUnsafe(
+        `CREATE TABLE IF NOT EXISTS "ProcessedUpdate" ("updateId" BIGINT PRIMARY KEY, "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now())`
+      );
+      await prisma.$executeRawUnsafe(`DELETE FROM "ProcessedUpdate" WHERE "createdAt" < now() - interval '2 days'`);
+      dedupeTableReady = true;
+    }
+    const inserted = await prisma.$executeRaw`INSERT INTO "ProcessedUpdate" ("updateId") VALUES (${updateId}) ON CONFLICT DO NOTHING`;
+    return inserted === 0;
+  } catch (err) {
+    logger.warn({ err: String(err) }, "update dedupe failed, processing anyway");
+    return false;
+  }
 }
 
 export async function buildServer() {
@@ -111,35 +130,33 @@ export async function buildServer() {
   });
 
   // --- Telegram webhook (prod / Vercel) ---
-  // Отвечаем Telegram СРАЗУ (200 OK), а update обрабатываем в фоне через waitUntil:
-  // иначе на медленных распознаваниях (>10 сек) Telegram считает доставку неудачной
-  // и ретраит тот же update — бот дублирует «Секунду, смотрю…» и запросы к ИИ.
-  const recentUpdateIds = new Set<number>();
+  // Дубли: Telegram ретраит update при медленном/неудачном ответе. Дедупликация — в БД
+  // (переживает разные инстансы). Если в рантайме доступен waitUntil — отвечаем сразу
+  // и обрабатываем в фоне; иначе обрабатываем синхронно (Telegram дожидается ответа).
   app.post("/api/tg-webhook", async (request, reply) => {
     if (request.headers["x-telegram-bot-api-secret-token"] !== config.webhookSecret) {
       return reply.code(401).send({ error: "unauthorized" });
     }
     const update = request.body as Update;
 
-    // Дедупликация повторных доставок в рамках тёплого инстанса
-    if (typeof update.update_id === "number") {
-      if (recentUpdateIds.has(update.update_id)) return reply.send({ ok: true, duplicate: true });
-      recentUpdateIds.add(update.update_id);
-      if (recentUpdateIds.size > 1000) {
-        for (const id of recentUpdateIds) {
-          recentUpdateIds.delete(id);
-          if (recentUpdateIds.size <= 500) break;
-        }
-      }
+    if (typeof update.update_id === "number" && (await isDuplicateUpdate(update.update_id))) {
+      return reply.send({ ok: true, duplicate: true });
     }
-
-    await reply.send({ ok: true });
 
     const work = (async () => {
       if (!bot.isInited()) await bot.init();
       await bot.handleUpdate(update);
     })().catch((err) => logger.error({ err: String(err), updateId: update.update_id }, "webhook update failed"));
-    scheduleBackgroundWork(work);
+
+    const waitUntil = getWaitUntil();
+    if (waitUntil) {
+      await reply.send({ ok: true });
+      waitUntil(work);
+    } else {
+      // Синхронный режим: лямбда живёт, пока идёт обработка; ретраи отсекает дедупликация
+      await work;
+      await reply.send({ ok: true });
+    }
   });
 
   // --- Cron-эндпоинты (Vercel Cron / внешний планировщик). Bearer CRON_SECRET, если задан. ---
