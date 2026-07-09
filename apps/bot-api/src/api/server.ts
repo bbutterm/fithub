@@ -1,7 +1,7 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
-import { webhookCallback } from "grammy";
+import type { Update } from "grammy/types";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import { config } from "../config.js";
@@ -81,6 +81,18 @@ function serializeMeal(m: {
   };
 }
 
+/**
+ * Продолжить фоновую работу после отправки HTTP-ответа.
+ * На Vercel лямбда замораживается сразу после ответа — waitUntil из request context
+ * (тот же механизм, что в @vercel/functions) держит её живой до завершения промиса.
+ * Локально (long polling / обычный Node) контекста нет — промис просто доработает сам.
+ */
+function scheduleBackgroundWork(work: Promise<unknown>): void {
+  const sym = Symbol.for("@vercel/request-context");
+  const store = (globalThis as unknown as Record<symbol, { get?: () => { waitUntil?: (p: Promise<unknown>) => void } } | undefined>)[sym];
+  store?.get?.()?.waitUntil?.(work);
+}
+
 export async function buildServer() {
   const app = Fastify({ loggerInstance: logger });
   // Probe ИИ-провайдеров: не блокирует старт, но подсказывает в логе про устаревшие модели
@@ -98,19 +110,37 @@ export async function buildServer() {
     return { ok: true };
   });
 
-  // --- Telegram webhook (prod / Vercel). Подлинность проверяется секретным токеном
-  // до передачи в grammY, чтобы посторонние запросы не доходили до bot.init(). ---
-  app.post(
-    "/api/tg-webhook",
-    {
-      preHandler: async (request, reply) => {
-        if (request.headers["x-telegram-bot-api-secret-token"] !== config.webhookSecret) {
-          await reply.code(401).send({ error: "unauthorized" });
+  // --- Telegram webhook (prod / Vercel) ---
+  // Отвечаем Telegram СРАЗУ (200 OK), а update обрабатываем в фоне через waitUntil:
+  // иначе на медленных распознаваниях (>10 сек) Telegram считает доставку неудачной
+  // и ретраит тот же update — бот дублирует «Секунду, смотрю…» и запросы к ИИ.
+  const recentUpdateIds = new Set<number>();
+  app.post("/api/tg-webhook", async (request, reply) => {
+    if (request.headers["x-telegram-bot-api-secret-token"] !== config.webhookSecret) {
+      return reply.code(401).send({ error: "unauthorized" });
+    }
+    const update = request.body as Update;
+
+    // Дедупликация повторных доставок в рамках тёплого инстанса
+    if (typeof update.update_id === "number") {
+      if (recentUpdateIds.has(update.update_id)) return reply.send({ ok: true, duplicate: true });
+      recentUpdateIds.add(update.update_id);
+      if (recentUpdateIds.size > 1000) {
+        for (const id of recentUpdateIds) {
+          recentUpdateIds.delete(id);
+          if (recentUpdateIds.size <= 500) break;
         }
       }
-    },
-    webhookCallback(bot, "fastify", { secretToken: config.webhookSecret })
-  );
+    }
+
+    await reply.send({ ok: true });
+
+    const work = (async () => {
+      if (!bot.isInited()) await bot.init();
+      await bot.handleUpdate(update);
+    })().catch((err) => logger.error({ err: String(err), updateId: update.update_id }, "webhook update failed"));
+    scheduleBackgroundWork(work);
+  });
 
   // --- Cron-эндпоинты (Vercel Cron / внешний планировщик). Bearer CRON_SECRET, если задан. ---
   const cronAuth = async (request: FastifyRequest, reply: FastifyReply) => {
