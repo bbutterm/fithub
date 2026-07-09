@@ -13,6 +13,12 @@ import { paywallKeyboard, registerPaymentHandlers } from "./payments.js";
 
 export const bot = new Bot(config.BOT_TOKEN);
 
+class RecognitionTimeoutError extends Error {
+  constructor() {
+    super("recognition timeout");
+  }
+}
+
 function mealKeyboard(mealId: number): InlineKeyboard {
   return new InlineKeyboard()
     .webApp("✏️ Поправить", `${config.WEBAPP_URL}?meal=${mealId}`)
@@ -70,7 +76,12 @@ async function handleRecognition(params: {
 
   const status = await ctx.reply("Секунду, смотрю… 👀");
   try {
-    const recognition = await params.recognize(user.id);
+    // Жёсткий бюджет на распознавание: статус-сообщение всегда получает финальный ответ
+    // до того, как serverless-функцию убьют по таймауту
+    const recognition = await Promise.race([
+      params.recognize(user.id),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new RecognitionTimeoutError()), 45_000))
+    ]);
     await incrementRecognitionCount(user);
     const meal = await createMealFromRecognition({
       userId: user.id,
@@ -92,7 +103,9 @@ async function handleRecognition(params: {
         ? params.source === "photo"
           ? "Хм, не вижу еды на этом фото 🤔 Попробуй сфотографировать ближе и при хорошем свете."
           : "Не понял, что из еды ты имел в виду 🤔 Опиши подробнее, например: «гречка с курицей, примерно 300 г»."
-        : "Не получилось распознать 😔 Попробуй ещё раз через минуту.";
+        : err instanceof RecognitionTimeoutError
+          ? "Слишком долго думаю над этим фото 😅 Пришли его ещё раз — обычно со второго раза быстрее."
+          : "Не получилось распознать 😔 Попробуй ещё раз через минуту.";
     if (!(err instanceof NoFoodError)) logger.error({ err: String(err), userId: user.id }, "recognition failed");
     await ctx.api.editMessageText(ctx.chat.id, status.message_id, message).catch(() => undefined);
   } finally {
