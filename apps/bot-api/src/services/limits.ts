@@ -24,6 +24,14 @@ export async function checkRecognitionLimit(user: User): Promise<LimitCheck> {
   return { allowed: used < limit, used, limit };
 }
 
+/** Анти-спам между инстансами: не более 12 вызовов ИИ за минуту (считаем по AiUsage). */
+export async function checkBurstLimit(userId: number): Promise<boolean> {
+  const count = await prisma.aiUsage.count({
+    where: { userId, createdAt: { gte: new Date(Date.now() - 60_000) } }
+  });
+  return count < 12;
+}
+
 export async function incrementRecognitionCount(user: User): Promise<void> {
   const date = localDateStr(user.tz);
   await prisma.usageCounter.upsert({

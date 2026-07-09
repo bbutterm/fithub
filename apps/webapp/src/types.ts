@@ -60,10 +60,23 @@ export interface MeResponse {
 export interface AdminOverview {
   usdRubRate: number;
   usersCount: number;
+  usersToday: number;
   activePro: number;
   mealsCount: number;
-  spend: { totalUsd: number; last30dUsd: number; promptTokens: number; completionTokens: number };
+  mealsToday: number;
+  spend: { totalUsd: number; last30dUsd: number; todayUsd: number; promptTokens: number; completionTokens: number };
+  spendByDay: Array<{ date: string; costUsd: number }>;
   byModel: Array<{ client: string; model: string; calls: number; promptTokens: number; completionTokens: number; costUsd: number }>;
+}
+
+export interface AdminUsageRow {
+  createdAt: string;
+  client: string;
+  model: string;
+  purpose: string;
+  promptTokens: number;
+  completionTokens: number;
+  costUsd: number;
 }
 
 export interface AdminUser {

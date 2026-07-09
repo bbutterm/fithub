@@ -64,6 +64,33 @@ export async function deleteItem(mealId: number, itemId: number) {
   });
 }
 
+/** Полная замена позиций приёма (уточнение ответом на карточку). */
+export async function replaceMealItems(mealId: number, recognition: FoodRecognition) {
+  return prisma.$transaction(async (tx) => {
+    await tx.mealItem.deleteMany({ where: { mealId } });
+    await tx.mealItem.createMany({
+      data: recognition.items.map((i) => ({
+        mealId,
+        dish: i.dish,
+        grams: i.grams,
+        kcal: i.kcal,
+        protein: i.protein,
+        fat: i.fat,
+        carbs: i.carbs,
+        confidence: i.confidence
+      }))
+    });
+    await tx.meal.update({
+      where: { id: mealId },
+      data: {
+        aiComment: recognition.comment ?? null,
+        overallConfidence: recognition.overall_confidence ?? null
+      }
+    });
+    return recalcMealTotals(mealId, tx);
+  });
+}
+
 export async function addItemsToMeal(mealId: number, recognition: FoodRecognition) {
   return prisma.$transaction(async (tx) => {
     await tx.mealItem.createMany({

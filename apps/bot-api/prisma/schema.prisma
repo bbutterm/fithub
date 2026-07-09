@@ -110,6 +110,7 @@ model Meal {
   photoFileId       String?
   photoThumbFileId  String? // маленький размер фото Telegram — для быстрых превью в ленте
   photoS3Key        String?
+  tgMessageId       BigInt? // message_id карточки в чате — для уточнения ответом на неё
   eatenAt           DateTime   @default(now())
   totalKcal         Float      @default(0)
   totalProtein      Float      @default(0)

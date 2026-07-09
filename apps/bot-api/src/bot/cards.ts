@@ -12,8 +12,9 @@ export function formatMealCard(params: {
   meal: Meal & { items: MealItem[] };
   dayKcal: number;
   targetKcal: number | null;
+  streak?: number;
 }): string {
-  const { meal, dayKcal, targetKcal } = params;
+  const { meal, dayKcal, targetKcal, streak } = params;
   const lines: string[] = ["🍽 <b>Записал приём пищи</b>", ""];
   for (const it of meal.items) {
     lines.push(`• ${it.dish} — ${r0(it.grams)} г · ${r0(it.kcal)} ккал (Б ${r0(it.protein)} / Ж ${r0(it.fat)} / У ${r0(it.carbs)})`);
@@ -27,9 +28,12 @@ export function formatMealCard(params: {
   } else {
     lines.push(`Сегодня: ${r0(dayKcal)} ккал`);
   }
+  if (streak && streak >= 2) {
+    lines.push(`🔥 ${streak >= 14 ? "14+" : streak} дн. подряд с записями — так держать!`);
+  }
   if (meal.overallConfidence !== null && meal.overallConfidence < 0.6) {
     lines.push("");
-    lines.push("⚠️ Не очень уверен в оценке — поправь граммы, если что.");
+    lines.push("⚠️ Не уверен в оценке — ответь на это сообщение уточнением («это была индейка, 200 г») и я пересчитаю.");
   }
   if (meal.aiComment) {
     lines.push("");

@@ -1,5 +1,15 @@
 import { getRawInitData } from "./telegram";
-import type { AdminOverview, AdminUser, AnalyticsResponse, DayResponse, Meal, MeResponse, Profile, SubscriptionResponse } from "./types";
+import type {
+  AdminOverview,
+  AdminUsageRow,
+  AdminUser,
+  AnalyticsResponse,
+  DayResponse,
+  Meal,
+  MeResponse,
+  Profile,
+  SubscriptionResponse
+} from "./types";
 
 let token: string | null = null;
 
@@ -88,6 +98,9 @@ export const api = {
       request<{ ok: boolean; expiresAt: string }>(`/api/admin/users/${userId}/pro`, { method: "POST", body: JSON.stringify({ days }) }),
     revokePro: (userId: number) => request<{ ok: boolean }>(`/api/admin/users/${userId}/pro`, { method: "DELETE" }),
     setLimit: (userId: number, limit: number | null) =>
-      request<{ ok: boolean }>(`/api/admin/users/${userId}/limit`, { method: "POST", body: JSON.stringify({ limit }) })
+      request<{ ok: boolean }>(`/api/admin/users/${userId}/limit`, { method: "POST", body: JSON.stringify({ limit }) }),
+    userUsage: (userId: number) => request<{ usdRubRate: number; usage: AdminUsageRow[] }>(`/api/admin/users/${userId}/usage`),
+    broadcast: (text: string) =>
+      request<{ ok: boolean; sent: number; failed: number }>("/api/admin/broadcast", { method: "POST", body: JSON.stringify({ text }) })
   }
 };

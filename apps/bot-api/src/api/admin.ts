@@ -20,32 +20,47 @@ export function registerAdminRoutes(app: FastifyInstance, authenticate: (r: Fast
     }
   };
 
-  // Сводка: пользователи, расходы на ИИ (всего / 30 дней), разбивка по клиентам
+  // Сводка: пользователи, расходы на ИИ (всего / 30 дней / сегодня), по дням и моделям
   app.get("/api/admin/overview", { preHandler: requireAdmin }, async () => {
-    const since30d = new Date(Date.now() - 30 * 24 * 3600 * 1000);
-    const [usersCount, activePro, mealsCount, spendAll, spend30d, byClient] = await Promise.all([
-      prisma.user.count(),
-      prisma.subscription.count({ where: { status: "active", plan: "pro", expiresAt: { gt: new Date() } } }),
-      prisma.meal.count(),
-      prisma.aiUsage.aggregate({ _sum: { costUsd: true, promptTokens: true, completionTokens: true } }),
-      prisma.aiUsage.aggregate({ _sum: { costUsd: true }, where: { createdAt: { gte: since30d } } }),
-      prisma.aiUsage.groupBy({
-        by: ["client", "model"],
-        _sum: { costUsd: true, promptTokens: true, completionTokens: true },
-        _count: { _all: true }
-      })
-    ]);
+    const now = new Date();
+    const since30d = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
+    const startOfDay = new Date(now);
+    startOfDay.setUTCHours(0, 0, 0, 0);
+    const [usersCount, usersToday, activePro, mealsCount, mealsToday, spendAll, spend30d, spendToday, byClient, spendByDay] =
+      await Promise.all([
+        prisma.user.count(),
+        prisma.user.count({ where: { createdAt: { gte: startOfDay } } }),
+        prisma.subscription.count({ where: { status: "active", plan: "pro", expiresAt: { gt: now } } }),
+        prisma.meal.count(),
+        prisma.meal.count({ where: { eatenAt: { gte: startOfDay } } }),
+        prisma.aiUsage.aggregate({ _sum: { costUsd: true, promptTokens: true, completionTokens: true } }),
+        prisma.aiUsage.aggregate({ _sum: { costUsd: true }, where: { createdAt: { gte: since30d } } }),
+        prisma.aiUsage.aggregate({ _sum: { costUsd: true }, where: { createdAt: { gte: startOfDay } } }),
+        prisma.aiUsage.groupBy({
+          by: ["client", "model"],
+          _sum: { costUsd: true, promptTokens: true, completionTokens: true },
+          _count: { _all: true }
+        }),
+        prisma.$queryRaw<Array<{ d: Date; cost: number }>>`
+          SELECT date_trunc('day', "createdAt") AS d, sum("costUsd")::float AS cost
+          FROM "AiUsage" WHERE "createdAt" > now() - interval '14 days'
+          GROUP BY 1 ORDER BY 1`
+      ]);
     return {
       usdRubRate: config.USD_RUB_RATE,
       usersCount,
+      usersToday,
       activePro,
       mealsCount,
+      mealsToday,
       spend: {
         totalUsd: spendAll._sum.costUsd ?? 0,
         last30dUsd: spend30d._sum.costUsd ?? 0,
+        todayUsd: spendToday._sum.costUsd ?? 0,
         promptTokens: spendAll._sum.promptTokens ?? 0,
         completionTokens: spendAll._sum.completionTokens ?? 0
       },
+      spendByDay: spendByDay.map((r) => ({ date: r.d.toISOString().slice(0, 10), costUsd: r.cost })),
       byModel: byClient.map((c) => ({
         client: c.client,
         model: c.model,
@@ -55,6 +70,27 @@ export function registerAdminRoutes(app: FastifyInstance, authenticate: (r: Fast
         costUsd: c._sum.costUsd ?? 0
       }))
     };
+  });
+
+  // Рассылка всем пользователям (анонсы для тестеров). Максимум 500 получателей за вызов.
+  app.post("/api/admin/broadcast", { preHandler: requireAdmin }, async (request, reply) => {
+    const body = z.object({ text: z.string().trim().min(3).max(3000) }).safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: "bad_request" });
+    const { bot } = await import("../bot/bot.js");
+    const users = await prisma.user.findMany({ select: { tgUserId: true }, take: 500, orderBy: { id: "asc" } });
+    let sent = 0;
+    let failed = 0;
+    for (const u of users) {
+      try {
+        await bot.api.sendMessage(Number(u.tgUserId), body.data.text);
+        sent++;
+      } catch {
+        failed++; // заблокировал бота / удалился — пропускаем
+      }
+      await new Promise((r) => setTimeout(r, 40)); // бережём rate limit Telegram
+    }
+    logger.info({ adminUid: request.user.uid, sent, failed }, "admin broadcast");
+    return { ok: true, sent, failed };
   });
 
   // Список пользователей с агрегатами расходов и активности

@@ -507,7 +507,32 @@ input[type="range"] {
   align-self: flex-start;
 }
 .badge-pro {
-  background: color-mix(in srgb, var(--warn) 18%, transparent);
-  color: var(--warn);
+  background: color-mix(in srgb, var(--fat) 18%, transparent);
+  color: var(--fat);
   font-weight: 600;
+}
+
+.broadcast-input {
+  width: 100%;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--tg-hint) 35%, transparent);
+  background: var(--tg-bg);
+  color: var(--tg-text);
+  font-size: 15px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.usage-list {
+  background: var(--tg-secondary-bg);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+.usage-row {
+  padding: 4px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--tg-hint) 12%, transparent);
+}
+.usage-row:last-child {
+  border-bottom: none;
 }
