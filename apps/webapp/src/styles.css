@@ -492,11 +492,25 @@ input[type="range"] {
   margin-bottom: 2px;
 }
 .admin-user {
-  padding: 12px 0;
+  padding: 4px 0;
   border-bottom: 1px solid color-mix(in srgb, var(--tg-hint) 15%, transparent);
 }
 .admin-user:last-child {
   border-bottom: none;
+}
+.admin-user-head {
+  cursor: pointer;
+  padding: 10px 0;
+}
+.admin-user-body {
+  padding: 4px 0 12px;
+  animation: fade-in 0.2s ease both;
+}
+.admin-user.open {
+  background: color-mix(in srgb, var(--brand) 4%, transparent);
+  margin: 0 -16px;
+  padding-left: 16px;
+  padding-right: 16px;
 }
 .badge {
   font-size: 11px;
