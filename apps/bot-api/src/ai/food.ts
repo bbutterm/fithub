@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
-import { buildPhotoHint, JSON_RETRY_PROMPT, TEXT_MEAL_SYSTEM_PROMPT, VISION_SYSTEM_PROMPT } from "../prompts/vision.js";
+import { buildPhotoHint, CORRECTION_SYSTEM_PROMPT, JSON_RETRY_PROMPT, TEXT_MEAL_SYSTEM_PROMPT, VISION_SYSTEM_PROMPT } from "../prompts/vision.js";
 import { AiUnavailableError, textClient, visionClient, type ChatMessage } from "../lib/ai.js";
 
 const foodItemSchema = z.object({
@@ -38,7 +38,7 @@ export class NoFoodError extends Error {
   }
 }
 
-const FALLBACK_CONFIDENCE_THRESHOLD = 0.7;
+const FALLBACK_CONFIDENCE_THRESHOLD = config.VISION_FALLBACK_THRESHOLD;
 
 /** Распознавание еды по фото (data URL) — ТОЛЬКО visionClient, при низком confidence повтор fallback-моделью. */
 export async function recognizeFoodPhoto(
@@ -111,4 +111,29 @@ export async function recognizeFoodText(description: string, userId?: number): P
   }
   if (value.error === "no_food" || value.items.length === 0) throw new NoFoodError();
   return { ...value, model };
+}
+
+/** Уточнение уже распознанного приёма ответом на карточку: возвращает полный новый список позиций. */
+export async function correctMealItems(
+  currentItems: Array<{ dish: string; grams: number; kcal: number; protein: number; fat: number; carbs: number }>,
+  correction: string,
+  userId?: number
+): Promise<FoodRecognition> {
+  const current = currentItems
+    .map((i) => `${i.dish} — ${Math.round(i.grams)} г (${Math.round(i.kcal)} ккал, Б${Math.round(i.protein)}/Ж${Math.round(i.fat)}/У${Math.round(i.carbs)})`)
+    .join("; ");
+  const messages: ChatMessage[] = [
+    { role: "system", content: CORRECTION_SYSTEM_PROMPT },
+    { role: "user", content: `Текущие позиции: ${current}\n\nУточнение пользователя: «${correction}»` }
+  ];
+  const attribution = { userId, purpose: "correction" };
+  let value: FoodRecognition;
+  try {
+    value = (await textClient.chatCompletionJson(messages, foodResponseSchema, JSON_RETRY_PROMPT, { attribution })).value;
+  } catch (err) {
+    if (!(err instanceof AiUnavailableError)) throw err;
+    value = (await visionClient.chatCompletionJson(messages, foodResponseSchema, JSON_RETRY_PROMPT, { attribution })).value;
+  }
+  if (value.error === "no_food" || value.items.length === 0) throw new NoFoodError();
+  return value;
 }

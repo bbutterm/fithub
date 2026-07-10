@@ -9,6 +9,7 @@ export async function createMealFromRecognition(params: {
   recognition: FoodRecognition;
   source: MealSource;
   photoFileId?: string;
+  photoThumbFileId?: string;
   eatenAt?: Date;
 }) {
   const items = params.recognition.items.map((i) => ({
@@ -26,6 +27,7 @@ export async function createMealFromRecognition(params: {
       userId: params.userId,
       source: params.source,
       photoFileId: params.photoFileId,
+      photoThumbFileId: params.photoThumbFileId,
       eatenAt: params.eatenAt ?? new Date(),
       aiComment: params.recognition.comment ?? null,
       overallConfidence: params.recognition.overall_confidence ?? null,
@@ -58,6 +60,33 @@ export async function updateItemGrams(mealId: number, itemId: number, newGrams: 
 export async function deleteItem(mealId: number, itemId: number) {
   return prisma.$transaction(async (tx) => {
     await tx.mealItem.delete({ where: { id: itemId } });
+    return recalcMealTotals(mealId, tx);
+  });
+}
+
+/** Полная замена позиций приёма (уточнение ответом на карточку). */
+export async function replaceMealItems(mealId: number, recognition: FoodRecognition) {
+  return prisma.$transaction(async (tx) => {
+    await tx.mealItem.deleteMany({ where: { mealId } });
+    await tx.mealItem.createMany({
+      data: recognition.items.map((i) => ({
+        mealId,
+        dish: i.dish,
+        grams: i.grams,
+        kcal: i.kcal,
+        protein: i.protein,
+        fat: i.fat,
+        carbs: i.carbs,
+        confidence: i.confidence
+      }))
+    });
+    await tx.meal.update({
+      where: { id: mealId },
+      data: {
+        aiComment: recognition.comment ?? null,
+        overallConfidence: recognition.overall_confidence ?? null
+      }
+    });
     return recalcMealTotals(mealId, tx);
   });
 }

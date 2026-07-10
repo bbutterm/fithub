@@ -1,5 +1,15 @@
 import { getRawInitData } from "./telegram";
-import type { AdminOverview, AdminUser, AnalyticsResponse, DayResponse, Meal, MeResponse, Profile, SubscriptionResponse } from "./types";
+import type {
+  AdminOverview,
+  AdminUsageRow,
+  AdminUser,
+  AnalyticsResponse,
+  DayResponse,
+  Meal,
+  MeResponse,
+  Profile,
+  SubscriptionResponse
+} from "./types";
 
 let token: string | null = null;
 
@@ -40,6 +50,9 @@ export interface AuthResult {
   token: string;
   user: { id: number; firstName: string | null; tz: string };
   hasProfile: boolean;
+  profile: Profile | null;
+  plan: "free" | "pro";
+  isAdmin: boolean;
 }
 
 export async function authorize(): Promise<AuthResult> {
@@ -52,8 +65,8 @@ export async function authorize(): Promise<AuthResult> {
   return res;
 }
 
-export function photoUrl(mealId: number): string {
-  return `/api/photos/${mealId}?token=${encodeURIComponent(token ?? "")}`;
+export function photoUrl(mealId: number, thumb = false): string {
+  return `/api/photos/${mealId}?token=${encodeURIComponent(token ?? "")}${thumb ? "&thumb=1" : ""}`;
 }
 
 export const api = {
@@ -85,6 +98,9 @@ export const api = {
       request<{ ok: boolean; expiresAt: string }>(`/api/admin/users/${userId}/pro`, { method: "POST", body: JSON.stringify({ days }) }),
     revokePro: (userId: number) => request<{ ok: boolean }>(`/api/admin/users/${userId}/pro`, { method: "DELETE" }),
     setLimit: (userId: number, limit: number | null) =>
-      request<{ ok: boolean }>(`/api/admin/users/${userId}/limit`, { method: "POST", body: JSON.stringify({ limit }) })
+      request<{ ok: boolean }>(`/api/admin/users/${userId}/limit`, { method: "POST", body: JSON.stringify({ limit }) }),
+    userUsage: (userId: number) => request<{ usdRubRate: number; usage: AdminUsageRow[] }>(`/api/admin/users/${userId}/usage`),
+    broadcast: (text: string) =>
+      request<{ ok: boolean; sent: number; failed: number }>("/api/admin/broadcast", { method: "POST", body: JSON.stringify({ text }) })
   }
 };

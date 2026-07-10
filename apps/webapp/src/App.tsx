@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, authorize } from "./api";
+import { authorize } from "./api";
 import { getStartParam } from "./telegram";
 import type { Profile } from "./types";
 import { Onboarding } from "./screens/Onboarding";
@@ -35,16 +35,16 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
+        // Один запрос вместо двух: авторизация сразу возвращает профиль, план и права
         const auth = await authorize();
         setUserName(auth.user.firstName);
         if (!auth.hasProfile) {
           setState("onboarding");
           return;
         }
-        const me = await api.me();
-        setProfile(me.profile);
-        setPlan(me.plan);
-        setIsAdmin(me.isAdmin);
+        setProfile(auth.profile);
+        setPlan(auth.plan);
+        setIsAdmin(auth.isAdmin);
         setState("ready");
       } catch {
         setState("error");

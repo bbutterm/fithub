@@ -23,6 +23,8 @@ const envSchema = z.object({
   VISION_API_KEY: z.string().min(5, "VISION_API_KEY обязателен — ключ vision-провайдера, https://openrouter.ai/keys"),
   VISION_MODEL: z.string().default("qwen/qwen3-vl-32b-instruct"),
   VISION_MODEL_FALLBACK: z.string().default("qwen/qwen3-vl-235b-a22b-instruct"),
+  // Порог уверенности, ниже которого фото перепроверяется fallback-моделью (0 — никогда, 1 — всегда)
+  VISION_FALLBACK_THRESHOLD: z.coerce.number().min(0).max(1).default(0.7),
 
   // Text-провайдер — советы, отчёты, текстовые описания еды (DeepSeek)
   TEXT_BASE_URL: z.string().url().default("https://api.deepseek.com/v1"),
