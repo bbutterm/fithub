@@ -1,7 +1,14 @@
 import { z } from "zod";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
-import { buildPhotoHint, CORRECTION_SYSTEM_PROMPT, JSON_RETRY_PROMPT, TEXT_MEAL_SYSTEM_PROMPT, VISION_SYSTEM_PROMPT } from "../prompts/vision.js";
+import {
+  buildPhotoHint,
+  CONTEXT_TEXT_SYSTEM_PROMPT,
+  CORRECTION_SYSTEM_PROMPT,
+  JSON_RETRY_PROMPT,
+  TEXT_MEAL_SYSTEM_PROMPT,
+  VISION_SYSTEM_PROMPT
+} from "../prompts/vision.js";
 import { AiUnavailableError, textClient, visionClient, type ChatMessage } from "../lib/ai.js";
 
 const foodItemSchema = z.object({
@@ -111,6 +118,37 @@ export async function recognizeFoodText(description: string, userId?: number): P
   }
   if (value.error === "no_food" || value.items.length === 0) throw new NoFoodError();
   return { ...value, model };
+}
+
+const contextResponseSchema = foodResponseSchema.extend({
+  action: z.enum(["correction", "new_meal", "none"]).default("new_meal")
+});
+export type ContextInterpretation = z.infer<typeof contextResponseSchema>;
+
+/**
+ * Текст без reply при наличии недавнего приёма: модель сама решает —
+ * это уточнение последней записи («съел половину»), новая еда или не про еду.
+ */
+export async function interpretUserText(
+  lastItems: Array<{ dish: string; grams: number; kcal: number; protein: number; fat: number; carbs: number }>,
+  minutesAgo: number,
+  text: string,
+  userId?: number
+): Promise<ContextInterpretation> {
+  const lastDesc = lastItems
+    .map((i) => `${i.dish} — ${Math.round(i.grams)} г (${Math.round(i.kcal)} ккал, Б${Math.round(i.protein)}/Ж${Math.round(i.fat)}/У${Math.round(i.carbs)})`)
+    .join("; ");
+  const messages: ChatMessage[] = [
+    { role: "system", content: CONTEXT_TEXT_SYSTEM_PROMPT },
+    { role: "user", content: `Последний приём (${minutesAgo} мин назад): ${lastDesc}\n\nНовое сообщение пользователя: «${text}»` }
+  ];
+  const attribution = { userId, purpose: "context_text" };
+  try {
+    return (await textClient.chatCompletionJson(messages, contextResponseSchema, JSON_RETRY_PROMPT, { attribution })).value;
+  } catch (err) {
+    if (!(err instanceof AiUnavailableError)) throw err;
+    return (await visionClient.chatCompletionJson(messages, contextResponseSchema, JSON_RETRY_PROMPT, { attribution })).value;
+  }
 }
 
 /** Уточнение уже распознанного приёма ответом на карточку: возвращает полный новый список позиций. */

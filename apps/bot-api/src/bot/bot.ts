@@ -2,7 +2,14 @@ import { Bot, InlineKeyboard, type Context } from "grammy";
 import { prisma } from "../db.js";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
-import { correctMealItems, NoFoodError, recognizeFoodPhoto, recognizeFoodText, type FoodRecognition } from "../ai/food.js";
+import {
+  correctMealItems,
+  interpretUserText,
+  NoFoodError,
+  recognizeFoodPhoto,
+  recognizeFoodText,
+  type FoodRecognition
+} from "../ai/food.js";
 import { createMealFromRecognition, deleteMeal, getDay, replaceMealItems } from "../services/meals.js";
 import { checkBurstLimit, checkRecognitionLimit, incrementRecognitionCount } from "../services/limits.js";
 import { acquireRecognitionLock, releaseRecognitionLock } from "../services/locks.js";
@@ -241,11 +248,12 @@ bot.on("message:photo", async (ctx) => {
 
 bot.on("message:text", async (ctx) => {
   const text = ctx.message.text.trim();
-  if (text.startsWith("/") || text.length < 3) return;
-  // Ответ на карточку приёма пищи = уточнение распознавания
+  if (text.startsWith("/") || text.length < 3 || !ctx.from) return;
+  const user = await upsertUserFromTelegram(ctx.from);
+
+  // Ответ на карточку приёма пищи = уточнение конкретной записи
   const replyTo = ctx.message.reply_to_message;
-  if (replyTo && ctx.from) {
-    const user = await upsertUserFromTelegram(ctx.from);
+  if (replyTo) {
     const meal = await prisma.meal.findFirst({
       where: { userId: user.id, tgMessageId: BigInt(replyTo.message_id) },
       select: { id: true }
@@ -255,8 +263,115 @@ bot.on("message:text", async (ctx) => {
       return;
     }
   }
+
+  // Есть недавняя запись — модель сама решит: это уточнение («съел половину»),
+  // новая еда или сообщение не про еду. Пользователи не делают reply — нужен контекст.
+  const lastMeal = await prisma.meal.findFirst({
+    where: { userId: user.id, eatenAt: { gte: new Date(Date.now() - 2 * 3600 * 1000) } },
+    orderBy: { eatenAt: "desc" },
+    include: { items: true }
+  });
+  if (lastMeal && lastMeal.items.length > 0) {
+    await handleContextualText(ctx, user, lastMeal, text);
+    return;
+  }
+
   await handleRecognition({ ctx, source: "text", recognize: (userId) => recognizeFoodText(text, userId) });
 });
+
+/** Текст при наличии недавней записи: уточнение последнего приёма / новая еда / не еда. */
+async function handleContextualText(
+  ctx: Context,
+  user: Awaited<ReturnType<typeof upsertUserFromTelegram>>,
+  lastMeal: { id: number; eatenAt: Date; tgMessageId: bigint | null; items: Array<{ dish: string; grams: number; kcal: number; protein: number; fat: number; carbs: number }> },
+  text: string
+): Promise<void> {
+  if (!ctx.chat) return;
+  if (!checkRateLimit(user.id) || !(await checkBurstLimit(user.id))) {
+    await ctx.reply("Слишком много запросов подряд 🙈 Подожди минутку.");
+    return;
+  }
+  if (!(await acquireRecognitionLock(user.id))) {
+    await ctx.reply("Секунду, ещё разбираю предыдущее 🙏");
+    return;
+  }
+  const status = await ctx.reply("Секунду… 👀");
+  try {
+    const minutesAgo = Math.max(1, Math.round((Date.now() - lastMeal.eatenAt.getTime()) / 60000));
+    const res = await Promise.race([
+      interpretUserText(lastMeal.items, minutesAgo, text, user.id),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new RecognitionTimeoutError()), 45_000))
+    ]);
+
+    if (res.action === "correction" && res.items.length > 0) {
+      const updated = await replaceMealItems(lastMeal.id, res);
+      const [profile, day, weekStats] = await Promise.all([
+        prisma.profile.findUnique({ where: { userId: user.id } }),
+        getDay(user.id, localDateStr(user.tz), user.tz),
+        getDailyStats(user.id, user.tz, 14)
+      ]);
+      const card = formatMealCard({
+        meal: updated,
+        dayKcal: day.totals.totalKcal,
+        targetKcal: profile?.targetKcal ?? null,
+        streak: calcStreak(weekStats)
+      });
+      if (lastMeal.tgMessageId) {
+        // Обновляем исходную карточку, статус — короткое подтверждение
+        await ctx.api
+          .editMessageText(ctx.chat.id, Number(lastMeal.tgMessageId), card, { parse_mode: "HTML", reply_markup: mealKeyboard(lastMeal.id) })
+          .catch(() => undefined);
+        await ctx.api.editMessageText(ctx.chat.id, status.message_id, "Обновил ✅ Карточка выше пересчитана.");
+      } else {
+        await ctx.api.editMessageText(ctx.chat.id, status.message_id, card, { parse_mode: "HTML", reply_markup: mealKeyboard(lastMeal.id) });
+      }
+      return;
+    }
+
+    if (res.action === "new_meal" && res.items.length > 0) {
+      const limit = await checkRecognitionLimit(user);
+      if (!limit.allowed) {
+        await ctx.api.editMessageText(
+          ctx.chat.id,
+          status.message_id,
+          `На бесплатном тарифе — ${limit.limit} распознавания в день, и на сегодня они закончились 😌 С Pro — безлимит.`,
+          { reply_markup: paywallKeyboard() }
+        );
+        return;
+      }
+      await incrementRecognitionCount(user);
+      const meal = await createMealFromRecognition({ userId: user.id, recognition: res, source: "text" });
+      const [profile, day, weekStats] = await Promise.all([
+        prisma.profile.findUnique({ where: { userId: user.id } }),
+        getDay(user.id, localDateStr(user.tz), user.tz),
+        getDailyStats(user.id, user.tz, 14)
+      ]);
+      await ctx.api.editMessageText(
+        ctx.chat.id,
+        status.message_id,
+        formatMealCard({ meal, dayKcal: day.totals.totalKcal, targetKcal: profile?.targetKcal ?? null, streak: calcStreak(weekStats) }),
+        { parse_mode: "HTML", reply_markup: mealKeyboard(meal.id) }
+      );
+      await prisma.meal.update({ where: { id: meal.id }, data: { tgMessageId: BigInt(status.message_id) } }).catch(() => undefined);
+      return;
+    }
+
+    await ctx.api.editMessageText(
+      ctx.chat.id,
+      status.message_id,
+      "Не понял 🤔 Опиши еду («гречка с курицей, 300 г») или уточни последнюю запись («съел половину», «это была индейка»)."
+    );
+  } catch (err) {
+    const message =
+      err instanceof RecognitionTimeoutError
+        ? "Слишком долго думаю 😅 Напиши ещё раз."
+        : "Не получилось обработать 😔 Попробуй ещё раз.";
+    if (!(err instanceof RecognitionTimeoutError)) logger.error({ err: String(err), userId: user.id }, "contextual text failed");
+    await ctx.api.editMessageText(ctx.chat.id, status.message_id, message).catch(() => undefined);
+  } finally {
+    await releaseRecognitionLock(user.id);
+  }
+}
 
 bot.catch((err) => {
   logger.error({ err: String(err.error) }, "bot error");
