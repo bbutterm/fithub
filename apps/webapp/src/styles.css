@@ -50,6 +50,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   font-size: 16px;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden; /* свайп-жесты не должны раскачивать страницу по горизонтали */
 }
 
 #root {
@@ -389,8 +390,7 @@ input[type="range"] {
 .swipe-wrap {
   position: relative;
   overflow: hidden;
-  margin: 0 -16px;
-  padding: 0 16px;
+  border-radius: 12px;
 }
 .swipe-actions {
   position: absolute;
@@ -398,6 +398,8 @@ input[type="range"] {
   bottom: 4px;
   right: 0;
   display: flex;
+  border-radius: 12px;
+  overflow: hidden;
 }
 .swipe-btn {
   flex: 1;
@@ -420,7 +422,6 @@ input[type="range"] {
 }
 .swipe-delete {
   background: var(--over);
-  border-radius: 0 12px 12px 0;
 }
 .swipe-content {
   position: relative;
