@@ -50,7 +50,12 @@ export type AppConfig = ReturnType<typeof loadConfig>;
 export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   // DIRECT_URL нужен Prisma для миграций; в рантайме достаточно DATABASE_URL
   env.DIRECT_URL ??= env.DATABASE_URL;
-  const parsed = envSchema.safeParse(env);
+  // Защита от копипасты: обрезаем пробелы и переводы строк во всех значениях
+  // (случайный Enter в Vercel Environment Variables ломал имя модели → 400 от провайдера)
+  const cleaned = Object.fromEntries(
+    Object.entries(env).map(([k, v]) => [k, typeof v === "string" ? v.trim() : v])
+  ) as NodeJS.ProcessEnv;
+  const parsed = envSchema.safeParse(cleaned);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
