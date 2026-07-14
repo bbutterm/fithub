@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../api";
 import type { Profile } from "../types";
+import { parseNum } from "./Onboarding";
 
 interface Props {
   profile: Profile;
@@ -13,8 +14,20 @@ const TONES: Array<{ v: Profile["adviceTone"]; l: string }> = [
   { v: "scientific", l: "Научный" }
 ];
 
+type NumKey = "birthYear" | "heightCm" | "weightKg" | "targetKcal" | "targetProtein" | "targetFat" | "targetCarbs";
+
 export function Settings({ profile, onSaved }: Props) {
   const [p, setP] = useState<Profile>(profile);
+  // Числовые поля храним строками: пустое поле остаётся пустым (Number("") === 0 давал «прилипающий 0»)
+  const [nums, setNums] = useState<Record<NumKey, string>>({
+    birthYear: profile.birthYear?.toString() ?? "",
+    heightCm: profile.heightCm?.toString() ?? "",
+    weightKg: profile.weightKg?.toString() ?? "",
+    targetKcal: profile.targetKcal?.toString() ?? "",
+    targetProtein: profile.targetProtein?.toString() ?? "",
+    targetFat: profile.targetFat?.toString() ?? "",
+    targetCarbs: profile.targetCarbs?.toString() ?? ""
+  });
   const [manualTargets, setManualTargets] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -25,19 +38,45 @@ export function Settings({ profile, onSaved }: Props) {
     setSaved(false);
   }
 
+  function updNum(key: NumKey, value: string) {
+    setNums((prev) => ({ ...prev, [key]: value }));
+    setSaved(false);
+  }
+
   async function save() {
+    const year = parseNum(nums.birthYear);
+    const height = parseNum(nums.heightCm);
+    const weight = parseNum(nums.weightKg);
+    if (!(year >= 1930 && year <= 2018 && height >= 120 && height <= 230 && weight >= 35 && weight <= 300)) {
+      setError("Проверьте год рождения, рост и вес — что-то не заполнено или вне разумных пределов.");
+      return;
+    }
+    const target = (key: NumKey) => {
+      if (!manualTargets) return null; // бэкенд пересчитает нормы сам
+      const n = parseNum(nums[key]);
+      return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+    };
     setSaving(true);
     setError("");
     try {
       const res = await api.saveProfile({
         ...p,
-        // при выключенных ручных целях бэкенд пересчитает нормы сам
-        targetKcal: manualTargets ? p.targetKcal : null,
-        targetProtein: manualTargets ? p.targetProtein : null,
-        targetFat: manualTargets ? p.targetFat : null,
-        targetCarbs: manualTargets ? p.targetCarbs : null
+        birthYear: year,
+        heightCm: Math.round(height),
+        weightKg: weight,
+        targetKcal: target("targetKcal"),
+        targetProtein: target("targetProtein"),
+        targetFat: target("targetFat"),
+        targetCarbs: target("targetCarbs")
       });
       setP(res.profile);
+      setNums((prev) => ({
+        ...prev,
+        targetKcal: res.profile.targetKcal?.toString() ?? "",
+        targetProtein: res.profile.targetProtein?.toString() ?? "",
+        targetFat: res.profile.targetFat?.toString() ?? "",
+        targetCarbs: res.profile.targetCarbs?.toString() ?? ""
+      }));
       onSaved(res.profile);
       setSaved(true);
     } catch {
@@ -50,7 +89,13 @@ export function Settings({ profile, onSaved }: Props) {
   const numField = (label: string, key: "birthYear" | "heightCm" | "weightKg") => (
     <label className="field">
       <span>{label}</span>
-      <input type="number" value={p[key] ?? ""} onChange={(e) => upd(key, Number(e.target.value) as never)} />
+      <input
+        type="number"
+        inputMode={key === "weightKg" ? "decimal" : "numeric"}
+        value={nums[key]}
+        onChange={(e) => updNum(key, e.target.value)}
+        onFocus={(e) => e.currentTarget.select()}
+      />
     </label>
   );
 
@@ -133,17 +178,17 @@ export function Settings({ profile, onSaved }: Props) {
         {manualTargets ? (
           <>
             <label className="field"><span>Калории</span>
-              <input type="number" value={p.targetKcal ?? ""} onChange={(e) => upd("targetKcal", Number(e.target.value))} />
+              <input type="number" inputMode="numeric" value={nums.targetKcal} onChange={(e) => updNum("targetKcal", e.target.value)} onFocus={(e) => e.currentTarget.select()} />
             </label>
             <div className="row">
               <label className="field" style={{ flex: 1 }}><span>Белки, г</span>
-                <input type="number" value={p.targetProtein ?? ""} onChange={(e) => upd("targetProtein", Number(e.target.value))} />
+                <input type="number" inputMode="numeric" value={nums.targetProtein} onChange={(e) => updNum("targetProtein", e.target.value)} onFocus={(e) => e.currentTarget.select()} />
               </label>
               <label className="field" style={{ flex: 1 }}><span>Жиры, г</span>
-                <input type="number" value={p.targetFat ?? ""} onChange={(e) => upd("targetFat", Number(e.target.value))} />
+                <input type="number" inputMode="numeric" value={nums.targetFat} onChange={(e) => updNum("targetFat", e.target.value)} onFocus={(e) => e.currentTarget.select()} />
               </label>
               <label className="field" style={{ flex: 1 }}><span>Углеводы, г</span>
-                <input type="number" value={p.targetCarbs ?? ""} onChange={(e) => upd("targetCarbs", Number(e.target.value))} />
+                <input type="number" inputMode="numeric" value={nums.targetCarbs} onChange={(e) => updNum("targetCarbs", e.target.value)} onFocus={(e) => e.currentTarget.select()} />
               </label>
             </div>
           </>
