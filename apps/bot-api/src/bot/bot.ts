@@ -8,6 +8,7 @@ import {
   NoFoodError,
   recognizeFoodPhoto,
   recognizeFoodText,
+  transcribeVoice,
   type FoodRecognition
 } from "../ai/food.js";
 import { createMealFromRecognition, deleteMeal, getDay, replaceMealItems } from "../services/meals.js";
@@ -92,7 +93,7 @@ const START_TEXT = [
   "<b>Просто пришли мне фото еды</b> — я определю блюда, посчитаю калории и БЖУ и запишу в дневник.",
   "💡 Подпиши фото названием блюда — распознавание будет точнее.",
   "✏️ Ошибся в распознавании? Ответь на карточку уточнением — пересчитаю.",
-  "Можно и текстом: «тарелка борща и два куска хлеба».",
+  "Можно текстом или голосовым 🎙: «тарелка борща и два куска хлеба».",
   "",
   "Команды:",
   "/day — сводка за сегодня",
@@ -315,20 +316,21 @@ bot.on("message:photo", async (ctx) => {
   });
 });
 
-bot.on("message:text", async (ctx) => {
-  const text = ctx.message.text.trim();
-  if (text.startsWith("/") || text.length < 3 || !ctx.from) return;
-  const user = await upsertUserFromTelegram(ctx.from);
-
+/** Общая маршрутизация текста (набранного или расшифрованного из голосового). */
+async function routeFoodText(
+  ctx: Context,
+  user: Awaited<ReturnType<typeof upsertUserFromTelegram>>,
+  text: string,
+  replyToMessageId?: number
+): Promise<void> {
   // Ответ на карточку приёма пищи = уточнение конкретной записи
-  const replyTo = ctx.message.reply_to_message;
-  if (replyTo) {
+  if (replyToMessageId) {
     const meal = await prisma.meal.findFirst({
-      where: { userId: user.id, tgMessageId: BigInt(replyTo.message_id) },
+      where: { userId: user.id, tgMessageId: BigInt(replyToMessageId) },
       select: { id: true }
     });
     if (meal) {
-      await handleCorrection(ctx, user.id, replyTo.message_id, text);
+      await handleCorrection(ctx, user.id, replyToMessageId, text);
       return;
     }
   }
@@ -346,6 +348,49 @@ bot.on("message:text", async (ctx) => {
   }
 
   await handleRecognition({ ctx, source: "text", recognize: (userId) => recognizeFoodText(text, userId) });
+}
+
+bot.on("message:text", async (ctx) => {
+  const text = ctx.message.text.trim();
+  if (text.startsWith("/") || text.length < 3 || !ctx.from) return;
+  const user = await upsertUserFromTelegram(ctx.from);
+  await routeFoodText(ctx, user, text, ctx.message.reply_to_message?.message_id);
+});
+
+bot.on("message:voice", async (ctx) => {
+  if (!ctx.from || !ctx.chat) return;
+  const voice = ctx.message.voice;
+  if (voice.duration > 60) {
+    await ctx.reply("Голосовое длинновато 🙈 Уложись, пожалуйста, в минуту.");
+    return;
+  }
+  const user = await upsertUserFromTelegram(ctx.from);
+  if (!checkRateLimit(user.id) || !(await checkBurstLimit(user.id))) {
+    await ctx.reply("Слишком много запросов подряд 🙈 Подожди минутку.");
+    return;
+  }
+  const status = await ctx.reply("Слушаю… 🎙");
+  let transcript = "";
+  try {
+    const { downloadTelegramFile } = await import("../services/tgfiles.js");
+    const { buffer } = await downloadTelegramFile(voice.file_id);
+    transcript = (await transcribeVoice(buffer.toString("base64"), user.id)).trim();
+  } catch (err) {
+    logger.error({ err: String(err), userId: user.id }, "voice transcription failed");
+    await ctx.api
+      .editMessageText(ctx.chat.id, status.message_id, "Не расслышал 😔 Попробуй ещё раз или напиши текстом.")
+      .catch(() => undefined);
+    return;
+  }
+  if (transcript.length < 2) {
+    await ctx.api
+      .editMessageText(ctx.chat.id, status.message_id, "Не разобрал слов 🤔 Скажи, что ты съел, например: «тарелка борща и два хлеба».")
+      .catch(() => undefined);
+    return;
+  }
+  // Показываем, что услышали (пользователь видит и может поправить), и запускаем обычный конвейер
+  await ctx.api.editMessageText(ctx.chat.id, status.message_id, `🎙 «${transcript}»`).catch(() => undefined);
+  await routeFoodText(ctx, user, transcript, ctx.message.reply_to_message?.message_id);
 });
 
 /** Текст при наличии недавней записи: уточнение последнего приёма / новая еда / не еда. */

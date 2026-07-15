@@ -25,6 +25,8 @@ const envSchema = z.object({
   VISION_MODEL_FALLBACK: z.string().default("qwen/qwen3-vl-235b-a22b-instruct"),
   // Порог уверенности, ниже которого фото перепроверяется fallback-моделью (0 — никогда, 1 — всегда)
   VISION_FALLBACK_THRESHOLD: z.coerce.number().min(0).max(1).default(0.7),
+  // Расшифровка голосовых: модель с поддержкой аудио-входа у vision-провайдера (OpenRouter)
+  AUDIO_MODEL: z.string().default("google/gemini-2.5-flash"),
 
   // Text-провайдер — советы, отчёты, текстовые описания еды (DeepSeek)
   TEXT_BASE_URL: z.string().url().default("https://api.deepseek.com/v1"),
