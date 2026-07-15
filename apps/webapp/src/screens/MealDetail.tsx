@@ -44,6 +44,20 @@ export function MealDetail({ mealId, onClose }: Props) {
     }
   }
 
+  async function changeTime(iso: string) {
+    if (!meal) return;
+    setBusy(true);
+    try {
+      const r = await api.updateMealTime(meal.id, iso);
+      setMeal(r.meal);
+      setChanged(true);
+    } catch {
+      setError("Не удалось изменить время");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function removeItem(itemId: number) {
     if (!meal) return;
     setBusy(true);
@@ -107,6 +121,24 @@ export function MealDetail({ mealId, onClose }: Props) {
                 onError={(e) => ((e.target as HTMLImageElement).style.display = "none")}
               />
             )}
+            <div className="card">
+              <div className="row spread">
+                <span className="hint small">🕐 Время приёма</span>
+                <input
+                  type="time"
+                  style={{ width: 120 }}
+                  value={new Date(meal.eatenAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
+                  disabled={busy}
+                  onChange={(e) => {
+                    const [h, m] = e.target.value.split(":").map(Number);
+                    if (h === undefined || m === undefined || Number.isNaN(h)) return;
+                    const d = new Date(meal.eatenAt);
+                    d.setHours(h, m, 0, 0);
+                    void changeTime(d.toISOString());
+                  }}
+                />
+              </div>
+            </div>
             {meal.items.map((it) => (
               <div className="card" key={it.id}>
                 <div className="row spread">

@@ -15,7 +15,7 @@ import { checkBurstLimit, checkRecognitionLimit, incrementRecognitionCount } fro
 import { acquireRecognitionLock, releaseRecognitionLock } from "../services/locks.js";
 import { calcStreak, getDailyStats } from "../services/stats.js";
 import { upsertUserFromTelegram } from "../services/users.js";
-import { localDateStr } from "../utils/tz.js";
+import { addDays, localDateStr, zonedTimeToUtc } from "../utils/tz.js";
 import { formatDaySummary, formatMealCard } from "./cards.js";
 import { checkRateLimit } from "./queue.js";
 import { paywallKeyboard, registerPaymentHandlers } from "./payments.js";
@@ -28,12 +28,62 @@ class RecognitionTimeoutError extends Error {
   }
 }
 
+/** «ел в 8:30 (вчера)» → UTC-инстант в таймзоне пользователя. */
+function eatenTimeToUtc(eaten: { day: "today" | "yesterday"; time: string }, tz: string): Date {
+  const date = eaten.day === "yesterday" ? addDays(localDateStr(tz), -1) : localDateStr(tz);
+  const time = eaten.time.length === 4 ? `0${eaten.time}` : eaten.time; // "8:30" → "08:30"
+  return zonedTimeToUtc(date, time, tz);
+}
+
 function mealKeyboard(mealId: number): InlineKeyboard {
   return new InlineKeyboard()
     .webApp("✏️ Поправить", `${config.WEBAPP_URL}?meal=${mealId}`)
     .text("🗑 Удалить", `meal:del:${mealId}`)
     .row()
+    .text("🕐 Время", `meal:time:${mealId}`)
     .webApp("📊 Дневник", config.WEBAPP_URL);
+}
+
+// Быстрый выбор времени приёма: сдвиги от «сейчас» и типовые часы (локальное время юзера)
+function timeKeyboard(mealId: number): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("−30 мин", `meal:ts:${mealId}:m30`)
+    .text("−1 ч", `meal:ts:${mealId}:m60`)
+    .text("−2 ч", `meal:ts:${mealId}:m120`)
+    .text("−3 ч", `meal:ts:${mealId}:m180`)
+    .row()
+    .text("Утро 8:00", `meal:ts:${mealId}:p08:00`)
+    .text("Обед 13:00", `meal:ts:${mealId}:p13:00`)
+    .text("Ужин 19:00", `meal:ts:${mealId}:p19:00`)
+    .row()
+    .text("↩️ Назад", `meal:tb:${mealId}`);
+}
+
+/** Перерисовать карточку приёма (после смены времени/состава). */
+async function redrawMealCard(ctx: Context, userId: number, mealId: number, messageId: number): Promise<void> {
+  if (!ctx.chat) return;
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+  const meal = await prisma.meal.findFirst({ where: { id: mealId, userId }, include: { items: true } });
+  if (!meal) return;
+  const [profile, day, weekStats] = await Promise.all([
+    prisma.profile.findUnique({ where: { userId } }),
+    getDay(userId, localDateStr(user.tz), user.tz),
+    getDailyStats(userId, user.tz, 14)
+  ]);
+  await ctx.api
+    .editMessageText(
+      ctx.chat.id,
+      messageId,
+      formatMealCard({
+        meal,
+        dayKcal: day.totals.totalKcal,
+        targetKcal: profile?.targetKcal ?? null,
+        streak: calcStreak(weekStats),
+        tz: user.tz
+      }),
+      { parse_mode: "HTML", reply_markup: mealKeyboard(mealId) }
+    )
+    .catch(() => undefined);
 }
 
 const START_TEXT = [
@@ -113,7 +163,8 @@ async function handleRecognition(params: {
         meal,
         dayKcal: day.totals.totalKcal,
         targetKcal: profile?.targetKcal ?? null,
-        streak: calcStreak(weekStats)
+        streak: calcStreak(weekStats),
+        tz: user.tz
       }),
       { parse_mode: "HTML", reply_markup: mealKeyboard(meal.id) }
     );
@@ -151,27 +202,13 @@ async function handleCorrection(ctx: Context, userId: number, mealTgMessageId: n
   const status = await ctx.reply("Пересчитываю… ✏️");
   try {
     const recognition = await correctMealItems(meal.items, correction, userId);
-    const updated = await replaceMealItems(meal.id, recognition);
+    if (recognition.items.length > 0) await replaceMealItems(meal.id, recognition);
     const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-    const [profile, day, weekStats] = await Promise.all([
-      prisma.profile.findUnique({ where: { userId } }),
-      getDay(userId, localDateStr(user.tz), user.tz),
-      getDailyStats(userId, user.tz, 14)
-    ]);
+    if (recognition.eaten_time) {
+      await prisma.meal.update({ where: { id: meal.id }, data: { eatenAt: eatenTimeToUtc(recognition.eaten_time, user.tz) } });
+    }
     // Обновляем исходную карточку и убираем статус
-    await ctx.api
-      .editMessageText(
-        ctx.chat.id,
-        mealTgMessageId,
-        formatMealCard({
-          meal: updated,
-          dayKcal: day.totals.totalKcal,
-          targetKcal: profile?.targetKcal ?? null,
-          streak: calcStreak(weekStats)
-        }),
-        { parse_mode: "HTML", reply_markup: mealKeyboard(meal.id) }
-      )
-      .catch(() => undefined);
+    await redrawMealCard(ctx, userId, meal.id, mealTgMessageId);
     await ctx.api.editMessageText(ctx.chat.id, status.message_id, "Обновил ✅ Карточка выше пересчитана.");
   } catch (err) {
     const message =
@@ -215,6 +252,38 @@ bot.command("settings", async (ctx) => {
   await ctx.reply("Настройки профиля, целей и советов — в приложении:", {
     reply_markup: new InlineKeyboard().webApp("⚙️ Открыть настройки", `${config.WEBAPP_URL}?screen=settings`)
   });
+});
+
+bot.callbackQuery(/^meal:time:(\d+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Выбери время — или ответь на карточку: «ел в 8:30»" });
+  await ctx.editMessageReplyMarkup({ reply_markup: timeKeyboard(Number(ctx.match[1])) }).catch(() => undefined);
+});
+
+bot.callbackQuery(/^meal:tb:(\d+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageReplyMarkup({ reply_markup: mealKeyboard(Number(ctx.match[1])) }).catch(() => undefined);
+});
+
+bot.callbackQuery(/^meal:ts:(\d+):(m\d+|p\d{2}:\d{2})$/, async (ctx) => {
+  if (!ctx.from) return;
+  const user = await upsertUserFromTelegram(ctx.from);
+  const mealId = Number(ctx.match[1]);
+  const choice = ctx.match[2] ?? "";
+  const meal = await prisma.meal.findFirst({ where: { id: mealId, userId: user.id }, select: { id: true } });
+  if (!meal) {
+    await ctx.answerCallbackQuery({ text: "Запись не найдена" });
+    return;
+  }
+  let eatenAt: Date;
+  if (choice.startsWith("m")) {
+    eatenAt = new Date(Date.now() - Number(choice.slice(1)) * 60_000);
+  } else {
+    eatenAt = zonedTimeToUtc(localDateStr(user.tz), choice.slice(1), user.tz);
+  }
+  await prisma.meal.update({ where: { id: mealId }, data: { eatenAt } });
+  await ctx.answerCallbackQuery({ text: "Время обновлено 🕐" });
+  const messageId = ctx.callbackQuery.message?.message_id;
+  if (messageId) await redrawMealCard(ctx, user.id, mealId, messageId);
 });
 
 bot.callbackQuery(/^meal:del:(\d+)$/, async (ctx) => {
@@ -303,27 +372,17 @@ async function handleContextualText(
       new Promise<never>((_, reject) => setTimeout(() => reject(new RecognitionTimeoutError()), 45_000))
     ]);
 
-    if (res.action === "correction" && res.items.length > 0) {
-      const updated = await replaceMealItems(lastMeal.id, res);
-      const [profile, day, weekStats] = await Promise.all([
-        prisma.profile.findUnique({ where: { userId: user.id } }),
-        getDay(user.id, localDateStr(user.tz), user.tz),
-        getDailyStats(user.id, user.tz, 14)
-      ]);
-      const card = formatMealCard({
-        meal: updated,
-        dayKcal: day.totals.totalKcal,
-        targetKcal: profile?.targetKcal ?? null,
-        streak: calcStreak(weekStats)
-      });
+    if (res.action === "correction" && (res.items.length > 0 || res.eaten_time)) {
+      if (res.items.length > 0) await replaceMealItems(lastMeal.id, res);
+      if (res.eaten_time) {
+        await prisma.meal.update({ where: { id: lastMeal.id }, data: { eatenAt: eatenTimeToUtc(res.eaten_time, user.tz) } });
+      }
       if (lastMeal.tgMessageId) {
         // Обновляем исходную карточку, статус — короткое подтверждение
-        await ctx.api
-          .editMessageText(ctx.chat.id, Number(lastMeal.tgMessageId), card, { parse_mode: "HTML", reply_markup: mealKeyboard(lastMeal.id) })
-          .catch(() => undefined);
+        await redrawMealCard(ctx, user.id, lastMeal.id, Number(lastMeal.tgMessageId));
         await ctx.api.editMessageText(ctx.chat.id, status.message_id, "Обновил ✅ Карточка выше пересчитана.");
       } else {
-        await ctx.api.editMessageText(ctx.chat.id, status.message_id, card, { parse_mode: "HTML", reply_markup: mealKeyboard(lastMeal.id) });
+        await redrawMealCard(ctx, user.id, lastMeal.id, status.message_id);
       }
       return;
     }
@@ -349,7 +408,7 @@ async function handleContextualText(
       await ctx.api.editMessageText(
         ctx.chat.id,
         status.message_id,
-        formatMealCard({ meal, dayKcal: day.totals.totalKcal, targetKcal: profile?.targetKcal ?? null, streak: calcStreak(weekStats) }),
+        formatMealCard({ meal, dayKcal: day.totals.totalKcal, targetKcal: profile?.targetKcal ?? null, streak: calcStreak(weekStats), tz: user.tz }),
         { parse_mode: "HTML", reply_markup: mealKeyboard(meal.id) }
       );
       await prisma.meal.update({ where: { id: meal.id }, data: { tgMessageId: BigInt(status.message_id) } }).catch(() => undefined);
