@@ -7,6 +7,7 @@ const rub = (usd: number, rate: number) => `${(usd * rate).toFixed(2)} ₽`;
 
 const PURPOSE_LABEL: Record<string, string> = {
   photo: "📷 фото",
+  voice: "🎙 голос",
   text_meal: "💬 текст",
   correction: "✏️ уточнение",
   advice: "🥗 совет",

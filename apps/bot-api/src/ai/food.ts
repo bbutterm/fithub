@@ -161,6 +161,22 @@ export async function interpretUserText(
   }
 }
 
+/** Расшифровка голосового (OGG/Opus из Telegram) через аудио-модель vision-провайдера. */
+export async function transcribeVoice(base64Ogg: string, userId?: number): Promise<string> {
+  const res = await visionClient.chatCompletion(
+    [
+      {
+        role: "system",
+        content:
+          "Расшифруй голосовое сообщение дословно. Верни ТОЛЬКО текст сообщения на языке говорящего, без кавычек, пояснений и знаков в начале."
+      },
+      { role: "user", content: [{ type: "input_audio", input_audio: { data: base64Ogg, format: "ogg" } }] }
+    ],
+    { model: config.AUDIO_MODEL, maxTokens: 500, attribution: { userId, purpose: "voice" } }
+  );
+  return res.text.trim();
+}
+
 /** Уточнение уже распознанного приёма ответом на карточку: возвращает полный новый список позиций. */
 export async function correctMealItems(
   currentItems: Array<{ dish: string; grams: number; kcal: number; protein: number; fat: number; carbs: number }>,
