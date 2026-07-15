@@ -13,9 +13,13 @@ export function formatMealCard(params: {
   dayKcal: number;
   targetKcal: number | null;
   streak?: number;
+  tz?: string;
 }): string {
-  const { meal, dayKcal, targetKcal, streak } = params;
-  const lines: string[] = ["🍽 <b>Записал приём пищи</b>", ""];
+  const { meal, dayKcal, targetKcal, streak, tz } = params;
+  const timeLabel = tz
+    ? new Intl.DateTimeFormat("ru-RU", { timeZone: tz, hour: "2-digit", minute: "2-digit" }).format(meal.eatenAt)
+    : null;
+  const lines: string[] = [`🍽 <b>Записал приём пищи</b>${timeLabel ? ` · 🕐 ${timeLabel}` : ""}`, ""];
   for (const it of meal.items) {
     lines.push(`• ${it.dish} — ${r0(it.grams)} г · ${r0(it.kcal)} ккал (Б ${r0(it.protein)} / Ж ${r0(it.fat)} / У ${r0(it.carbs)})`);
   }

@@ -326,6 +326,22 @@ export async function buildServer() {
     return { meal: serializeMeal(meal) };
   });
 
+  // Изменение времени приёма (не дальше 30 дней назад и не в будущем)
+  app.patch("/api/meals/:mealId", { preHandler: authenticate }, async (request, reply) => {
+    const params = request.params as { mealId: string };
+    const body = z.object({ eatenAt: z.string().datetime() }).safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: "bad_request" });
+    const eatenAt = new Date(body.data.eatenAt);
+    const now = Date.now();
+    if (eatenAt.getTime() > now + 10 * 60_000 || eatenAt.getTime() < now - 30 * 24 * 3600 * 1000) {
+      return reply.code(400).send({ error: "bad_time" });
+    }
+    const meal = await getMealForUser(Number(params.mealId), request.user.uid);
+    if (!meal) return reply.code(404).send({ error: "not_found" });
+    const updated = await prisma.meal.update({ where: { id: meal.id }, data: { eatenAt }, include: { items: true } });
+    return { meal: serializeMeal(updated) };
+  });
+
   app.patch("/api/meals/:mealId/items/:itemId", { preHandler: authenticate }, async (request, reply) => {
     const params = request.params as { mealId: string; itemId: string };
     const body = z.object({ grams: z.number().min(1).max(5000) }).safeParse(request.body);

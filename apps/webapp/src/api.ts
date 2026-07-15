@@ -78,6 +78,8 @@ export const api = {
     ),
   day: (date?: string) => request<DayResponse>(`/api/day${date ? `?date=${date}` : ""}`),
   meal: (id: number) => request<{ meal: Meal }>(`/api/meals/${id}`),
+  updateMealTime: (mealId: number, eatenAt: string) =>
+    request<{ meal: Meal }>(`/api/meals/${mealId}`, { method: "PATCH", body: JSON.stringify({ eatenAt }) }),
   updateGrams: (mealId: number, itemId: number, grams: number) =>
     request<{ meal: Meal }>(`/api/meals/${mealId}/items/${itemId}`, { method: "PATCH", body: JSON.stringify({ grams }) }),
   deleteItem: (mealId: number, itemId: number) =>

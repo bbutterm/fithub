@@ -120,7 +120,17 @@ export async function recognizeFoodText(description: string, userId?: number): P
   return { ...value, model };
 }
 
-const contextResponseSchema = foodResponseSchema.extend({
+const eatenTimeSchema = z.object({
+  day: z.enum(["today", "yesterday"]).default("today"),
+  time: z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/)
+});
+export type EatenTime = z.infer<typeof eatenTimeSchema>;
+
+const correctionResponseSchema = foodResponseSchema.extend({
+  eaten_time: eatenTimeSchema.optional()
+});
+
+const contextResponseSchema = correctionResponseSchema.extend({
   action: z.enum(["correction", "new_meal", "none"]).default("new_meal")
 });
 export type ContextInterpretation = z.infer<typeof contextResponseSchema>;
@@ -156,7 +166,7 @@ export async function correctMealItems(
   currentItems: Array<{ dish: string; grams: number; kcal: number; protein: number; fat: number; carbs: number }>,
   correction: string,
   userId?: number
-): Promise<FoodRecognition> {
+): Promise<FoodRecognition & { eaten_time?: EatenTime }> {
   const current = currentItems
     .map((i) => `${i.dish} — ${Math.round(i.grams)} г (${Math.round(i.kcal)} ккал, Б${Math.round(i.protein)}/Ж${Math.round(i.fat)}/У${Math.round(i.carbs)})`)
     .join("; ");
@@ -165,12 +175,12 @@ export async function correctMealItems(
     { role: "user", content: `Текущие позиции: ${current}\n\nУточнение пользователя: «${correction}»` }
   ];
   const attribution = { userId, purpose: "correction" };
-  let value: FoodRecognition;
+  let value: FoodRecognition & { eaten_time?: EatenTime };
   try {
-    value = (await textClient.chatCompletionJson(messages, foodResponseSchema, JSON_RETRY_PROMPT, { attribution })).value;
+    value = (await textClient.chatCompletionJson(messages, correctionResponseSchema, JSON_RETRY_PROMPT, { attribution })).value;
   } catch (err) {
     if (!(err instanceof AiUnavailableError)) throw err;
-    value = (await visionClient.chatCompletionJson(messages, foodResponseSchema, JSON_RETRY_PROMPT, { attribution })).value;
+    value = (await visionClient.chatCompletionJson(messages, correctionResponseSchema, JSON_RETRY_PROMPT, { attribution })).value;
   }
   if (value.error === "no_food" || value.items.length === 0) throw new NoFoodError();
   return value;
