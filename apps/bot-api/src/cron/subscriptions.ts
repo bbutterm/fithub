@@ -2,6 +2,7 @@ import { InlineKeyboard } from "grammy";
 import { logger } from "../logger.js";
 import { bot } from "../bot/bot.js";
 import { config } from "../config.js";
+import { PAYMENTS_ENABLED } from "../features.js";
 import { expireSubscriptions } from "../services/subscription.js";
 
 /** Ежедневно: деактивация истёкших подписок + предложение продлить. */
@@ -13,8 +14,8 @@ export async function runSubscriptionExpiryTick(): Promise<void> {
       await bot.api.sendMessage(
         Number(sub.user.tgUserId),
         // С отключённой оплатой не предлагаем продление, которое невозможно оформить
-        config.PAYMENTS_ENABLED ? `${base}\n\nПродлить можно в один тап:` : base,
-        config.PAYMENTS_ENABLED
+        PAYMENTS_ENABLED ? `${base}\n\nПродлить можно в один тап:` : base,
+        PAYMENTS_ENABLED
           ? {
               reply_markup: new InlineKeyboard()
                 .text(`⭐ Месяц — ${config.STARS_PRICE_MONTH} Stars`, "pay:month")

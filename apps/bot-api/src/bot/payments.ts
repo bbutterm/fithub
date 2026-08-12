@@ -1,5 +1,6 @@
 import { InlineKeyboard, type Bot, type Context } from "grammy";
 import { config } from "../config.js";
+import { PAYMENTS_ENABLED } from "../features.js";
 import { logger } from "../logger.js";
 import { extendPro } from "../services/subscription.js";
 import { upsertUserFromTelegram } from "../services/users.js";
@@ -11,7 +12,7 @@ export const PLAN_PAYLOADS = {
 
 /** Клавиатура пейволла. При PAYMENTS_ENABLED=false кнопок покупки нет — только тарифы. */
 export function paywallKeyboard(): InlineKeyboard {
-  if (!config.PAYMENTS_ENABLED) {
+  if (!PAYMENTS_ENABLED) {
     return new InlineKeyboard().webApp("📊 Открыть дневник", config.WEBAPP_URL);
   }
   return new InlineKeyboard()
@@ -27,7 +28,7 @@ export function paywallKeyboard(): InlineKeyboard {
  * С отключённой оплатой не зовём в Pro, которое нельзя купить, — просто говорим, когда возвращаться.
  */
 export function limitReachedText(limit: number, short = false): string {
-  if (!config.PAYMENTS_ENABLED) {
+  if (!PAYMENTS_ENABLED) {
     return short
       ? `На сегодня распознавания закончились (${limit} в день) 😌 Возвращайся завтра — счётчик обнулится.`
       : [
@@ -60,7 +61,7 @@ export async function sendProInvoice(ctx: Context, plan: keyof typeof PLAN_PAYLO
 
 export function registerPaymentHandlers(bot: Bot): void {
   bot.callbackQuery(/^pay:(month|year)$/, async (ctx) => {
-    if (!config.PAYMENTS_ENABLED) {
+    if (!PAYMENTS_ENABLED) {
       await ctx.answerCallbackQuery({ text: "Оплата сейчас отключена", show_alert: true });
       return;
     }

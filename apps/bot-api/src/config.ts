@@ -33,17 +33,7 @@ const envSchema = z.object({
   TEXT_API_KEY: z.string().min(5, "TEXT_API_KEY обязателен — ключ text-провайдера, https://platform.deepseek.com/api_keys"),
   TEXT_MODEL: z.string().default("deepseek-chat"),
 
-  // Приём оплаты: false — кнопки покупки и выставление счетов отключены,
-  // тарифы и лимиты продолжают работать, Pro выдаётся только из админки.
-  // Уже начатые платежи всё равно зачисляются (см. bot/payments.ts).
-  // Регистр не важен ("False" тоже выключает), но опечатка падает с понятной ошибкой,
-  // а не оставляет оплату включённой втихую.
-  PAYMENTS_ENABLED: z
-    .string()
-    .default("true")
-    .transform((v) => v.trim().toLowerCase())
-    .pipe(z.enum(["true", "false", "1", "0", "yes", "no", "on", "off"]))
-    .transform((v) => !["false", "0", "no", "off"].includes(v)),
+  // Приём оплаты включается/выключается в коде — см. src/features.ts (PAYMENTS_ENABLED)
   STARS_PRICE_MONTH: z.coerce.number().int().positive().default(250),
   STARS_PRICE_YEAR: z.coerce.number().int().positive().default(1700),
   FREE_PHOTOS_PER_DAY: z.coerce.number().int().positive().default(3),
