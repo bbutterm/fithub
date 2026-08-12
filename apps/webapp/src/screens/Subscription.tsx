@@ -3,8 +3,8 @@ import { api } from "../api";
 import type { SubscriptionResponse } from "../types";
 import { openInvoice } from "../telegram";
 
-const FEATURES: Array<{ name: string; free: string; pro: string }> = [
-  { name: "Распознаваний в день", free: "3", pro: "Безлимит" },
+const features = (freeLimit: number): Array<{ name: string; free: string; pro: string }> => [
+  { name: "Распознаваний в день", free: String(freeLimit), pro: "Безлимит" },
   { name: "Советы нутрициолога", free: "2 раза в неделю", pro: "Каждый день" },
   { name: "Аналитика", free: "Неделя", pro: "Неделя и месяц" },
   { name: "Месячный отчёт с инсайтами", free: "—", pro: "✓" }
@@ -58,7 +58,7 @@ export function Subscription() {
 
           <div className="card">
             <h2>Free vs Pro</h2>
-            {FEATURES.map((f) => (
+            {features(sub.freeLimit).map((f) => (
               <div className="row spread mt" key={f.name}>
                 <span className="hint small" style={{ flex: 1.4 }}>{f.name}</span>
                 <span className="small" style={{ flex: 0.8, textAlign: "center" }}>{f.free}</span>
@@ -67,14 +67,20 @@ export function Subscription() {
             ))}
           </div>
 
-          <button className="btn mb" disabled={busy} onClick={() => void buy("month")}>
-            ⭐ Pro на месяц — {sub.prices.month} Stars
-          </button>
-          <button className="btn secondary" disabled={busy} onClick={() => void buy("year")}>
-            ⭐ Pro на год — {sub.prices.year} Stars
-          </button>
-          {error && <p className="hint mt" style={{ color: "#e53935" }}>{error}</p>}
-          <p className="hint small mt center">Оплата в Telegram Stars внутри приложения.</p>
+          {sub.paymentsEnabled ? (
+            <>
+              <button className="btn mb" disabled={busy} onClick={() => void buy("month")}>
+                ⭐ Pro на месяц — {sub.prices.month} Stars
+              </button>
+              <button className="btn secondary" disabled={busy} onClick={() => void buy("year")}>
+                ⭐ Pro на год — {sub.prices.year} Stars
+              </button>
+              {error && <p className="hint mt" style={{ color: "#e53935" }}>{error}</p>}
+              <p className="hint small mt center">Оплата в Telegram Stars внутри приложения.</p>
+            </>
+          ) : (
+            <p className="hint small center">Оплата сейчас отключена — Pro не продаётся.</p>
+          )}
         </>
       )}
     </div>

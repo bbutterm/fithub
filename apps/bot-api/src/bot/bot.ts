@@ -19,7 +19,7 @@ import { upsertUserFromTelegram } from "../services/users.js";
 import { addDays, localDateStr, zonedTimeToUtc } from "../utils/tz.js";
 import { formatDaySummary, formatMealCard } from "./cards.js";
 import { checkRateLimit } from "./queue.js";
-import { paywallKeyboard, registerPaymentHandlers } from "./payments.js";
+import { limitReachedText, paywallKeyboard, registerPaymentHandlers } from "./payments.js";
 
 export const bot = new Bot(config.BOT_TOKEN);
 
@@ -120,14 +120,10 @@ async function handleRecognition(params: {
 
   const limit = await checkRecognitionLimit(user);
   if (!limit.allowed) {
-    await ctx.reply(
-      [
-        `На бесплатном тарифе — ${limit.limit} распознавания в день, и на сегодня они закончились 😌`,
-        "",
-        "С <b>Pro</b> распознавания безлимитные, советы приходят каждый день, а аналитика открыта за месяц."
-      ].join("\n"),
-      { parse_mode: "HTML", reply_markup: paywallKeyboard() }
-    );
+    await ctx.reply(limitReachedText(limit.limit ?? config.FREE_PHOTOS_PER_DAY), {
+      parse_mode: "HTML",
+      reply_markup: paywallKeyboard()
+    });
     return;
   }
 
@@ -438,7 +434,7 @@ async function handleContextualText(
         await ctx.api.editMessageText(
           ctx.chat.id,
           status.message_id,
-          `На бесплатном тарифе — ${limit.limit} распознавания в день, и на сегодня они закончились 😌 С Pro — безлимит.`,
+          limitReachedText(limit.limit ?? config.FREE_PHOTOS_PER_DAY, true),
           { reply_markup: paywallKeyboard() }
         );
         return;
