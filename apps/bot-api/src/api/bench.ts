@@ -2,12 +2,15 @@
 // Загружаете фото — оно по очереди уходит в выбранные модели, по каждой видно
 // результат распознавания, фактическую цену вызова и время ответа.
 //
-// Доступ: GET /api/bench?key=<BENCH_KEY> (если BENCH_KEY не задан — берётся CRON_SECRET).
-// Без секрета страница отключена: это кнопка «потратить баланс», её нельзя открывать всем.
-import type { FastifyInstance, FastifyRequest } from "fastify";
+// Доступ: GET /api/bench — открыт всем, пароля нет.
+// Баланс защищён единственным ограничителем: дневным потолком расходов стенда
+// (features.ts → BENCH_DAILY_USD_LIMIT). Страница закрыта от индексации.
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { config } from "../config.js";
+import { prisma } from "../db.js";
 import { logger } from "../logger.js";
+import { BENCH_DAILY_USD_LIMIT } from "../features.js";
 import { visionClient, type ChatMessage } from "../lib/ai.js";
 import { foodResponseSchema } from "../ai/food.js";
 import { buildPhotoHint, JSON_RETRY_PROMPT, VISION_SYSTEM_PROMPT } from "../prompts/vision.js";
@@ -26,29 +29,37 @@ const DEFAULT_MODELS = [
 // Один вызов должен уложиться в лимит serverless-функции (60 с) с запасом на сеть
 const BENCH_TIMEOUT_MS = 25_000;
 
-function benchKey(): string {
-  return config.BENCH_KEY || config.CRON_SECRET;
-}
-
-function authorized(request: FastifyRequest): boolean {
-  const key = benchKey();
-  if (!key) return false; // секрет не задан — стенд выключен
-  const q = (request.query as { key?: string }).key;
-  const b = (request.body as { key?: string } | undefined)?.key;
-  return q === key || b === key;
+/** Сколько стенд потратил за текущие сутки (UTC). Считается по учёту расходов. */
+async function spentTodayUsd(): Promise<number> {
+  const startOfDay = new Date();
+  startOfDay.setUTCHours(0, 0, 0, 0);
+  try {
+    const agg = await prisma.aiUsage.aggregate({
+      _sum: { costUsd: true },
+      where: { purpose: "bench", createdAt: { gte: startOfDay } }
+    });
+    return agg._sum.costUsd ?? 0;
+  } catch (err) {
+    // Если БД недоступна — не блокируем стенд, но и не теряем сигнал
+    logger.warn({ err: String(err) }, "bench spend check failed");
+    return 0;
+  }
 }
 
 export function registerBenchRoutes(app: FastifyInstance): void {
   // --- Страница стенда ---
-  app.get("/api/bench", async (request, reply) => {
-    if (!authorized(request)) return reply.code(404).send({ error: "not_found" });
-    return reply.type("text/html; charset=utf-8").header("Cache-Control", "no-store").send(renderPage());
+  app.get("/api/bench", async (_request, reply) => {
+    return reply
+      .type("text/html; charset=utf-8")
+      .header("Cache-Control", "no-store")
+      // страница тратит деньги — в поиске ей делать нечего
+      .header("X-Robots-Tag", "noindex, nofollow")
+      .send(renderPage());
   });
 
   // --- Список доступных моделей провайдера с актуальными ценами ---
   // Снимает главную боль: точные имена моделей меняются, гадать не нужно.
   app.get("/api/bench/models", async (request, reply) => {
-    if (!authorized(request)) return reply.code(404).send({ error: "not_found" });
     const q = ((request.query as { q?: string }).q ?? "").trim().toLowerCase();
     try {
       const res = await fetch(`${config.VISION_BASE_URL}/models`, {
@@ -86,10 +97,8 @@ export function registerBenchRoutes(app: FastifyInstance): void {
   // --- Прогон одного фото через одну модель ---
   // Одна модель на запрос: семь моделей в одной функции не уложились бы в 60 секунд.
   app.post("/api/bench/run", { bodyLimit: 12 * 1024 * 1024 }, async (request, reply) => {
-    if (!authorized(request)) return reply.code(404).send({ error: "not_found" });
     const parsed = z
       .object({
-        key: z.string(),
         model: z.string().min(1).max(120),
         imageDataUrl: z.string().startsWith("data:image/"),
         caption: z.string().max(300).optional()
@@ -97,6 +106,17 @@ export function registerBenchRoutes(app: FastifyInstance): void {
       .safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "bad_request" });
     const { model, imageDataUrl, caption } = parsed.data;
+
+    // Единственная защита открытой страницы: дневной потолок расходов стенда
+    const spent = await spentTodayUsd();
+    if (spent >= BENCH_DAILY_USD_LIMIT) {
+      return reply.code(429).send({
+        ok: false,
+        error: `Дневной лимит стенда исчерпан: потрачено $${spent.toFixed(3)} из $${BENCH_DAILY_USD_LIMIT}. Счётчик обнулится завтра, поднять потолок — apps/bot-api/src/features.ts.`,
+        spentTodayUsd: spent,
+        limitUsd: BENCH_DAILY_USD_LIMIT
+      });
+    }
 
     const messages: ChatMessage[] = [
       { role: "system", content: VISION_SYSTEM_PROMPT },
@@ -123,7 +143,9 @@ export function registerBenchRoutes(app: FastifyInstance): void {
         latencyMs: res.latencyMs,
         costUsd: res.costUsd,
         usage: res.usage,
-        result: res.value
+        result: res.value,
+        spentTodayUsd: spent + res.costUsd,
+        limitUsd: BENCH_DAILY_USD_LIMIT
       };
     } catch (err) {
       // Ошибку конкретной модели показываем в её карточке, остальные продолжают прогон
@@ -140,6 +162,7 @@ function renderPage(): string {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="robots" content="noindex, nofollow" />
 <title>Стенд моделей — распознавание еды</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -184,7 +207,7 @@ function renderPage(): string {
 <body>
 <div class="wrap">
   <h1>Стенд моделей</h1>
-  <p class="hint">Одно фото — семь моделей. Цена и время берутся фактические, из ответа провайдера.</p>
+  <p class="hint">Одно фото — семь моделей. Цена и время берутся фактические, из ответа провайдера. Расходы ограничены дневным потолком.</p>
 
   <div class="card" style="margin-top:12px">
     <label class="f"><span>Фото еды</span><input type="file" id="file" accept="image/*" /></label>
@@ -209,10 +232,10 @@ function renderPage(): string {
 </div>
 <script>
 (function () {
-  var KEY = new URLSearchParams(location.search).get('key') || '';
   var RATE = ${rate};
   var DEFAULTS = ${models};
   var img = null;
+  var budget = null; // {spentTodayUsd, limitUsd} — приходит с каждым ответом прогона
 
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
@@ -263,7 +286,7 @@ function renderPage(): string {
 
   function loadModels(q) {
     $('found').innerHTML = '<div class="hint small">Загружаю…</div>';
-    fetch('/api/bench/models?key=' + encodeURIComponent(KEY) + '&q=' + encodeURIComponent(q))
+    fetch('/api/bench/models?q=' + encodeURIComponent(q))
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (!d.models || !d.models.length) { $('found').innerHTML = '<div class="hint small">Ничего не найдено</div>'; return; }
@@ -306,10 +329,14 @@ function renderPage(): string {
       fetch('/api/bench/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: KEY, model: model, imageDataUrl: img, caption: $('caption').value })
+        body: JSON.stringify({ model: model, imageDataUrl: img, caption: $('caption').value })
       })
         .then(function (r) { return r.json(); })
-        .then(function (d) { render(card, model, d, Date.now() - t0); if (d && d.ok) results.push(d); })
+        .then(function (d) {
+          if (d && d.limitUsd != null) budget = { spent: d.spentTodayUsd, limit: d.limitUsd };
+          render(card, model, d, Date.now() - t0);
+          if (d && d.ok) results.push(d);
+        })
         .catch(function (e) { render(card, model, { ok: false, error: String(e) }, Date.now() - t0); })
         .then(next);
     })();
@@ -348,8 +375,15 @@ function renderPage(): string {
       (r.observed ? '<p class="hint small" style="margin-top:6px">👁 ' + esc(r.observed) + '</p>' : '');
   }
 
+  function budgetLine() {
+    if (!budget) return '';
+    var left = Math.max(0, budget.limit - budget.spent);
+    return '<p class="hint small" style="margin-top:8px">Дневной лимит стенда: потрачено $' + Number(budget.spent).toFixed(3) +
+      ' из $' + Number(budget.limit).toFixed(2) + ', осталось примерно ' + Math.floor(left / 0.005) + ' прогонов.</p>';
+  }
+
   function summary(res) {
-    if (res.length < 2) return;
+    if (res.length < 2) { if (budget) $('sum').innerHTML = '<div class="card">' + budgetLine() + '</div>'; return; }
     var byCost = res.slice().sort(function (a, b) { return a.costUsd - b.costUsd; });
     var byTime = res.slice().sort(function (a, b) { return a.latencyMs - b.latencyMs; });
     var kcal = res.map(function (d) {
@@ -363,7 +397,8 @@ function renderPage(): string {
       '<p class="small">Разброс по калориям: ' + Math.round(min) + '–' + Math.round(max) + ' ккал' +
       (min > 0 ? ' (×' + (max / min).toFixed(1) + ')' : '') + '</p>' +
       '<p class="small">Весь прогон обошёлся в ' + money(total) + '</p>' +
-      '<p class="hint small" style="margin-top:8px">Дорогая модель оправдана только там, где она реально ближе к правде. Сверьте граммы с тем, что было на тарелке.</p></div>';
+      '<p class="hint small" style="margin-top:8px">Дорогая модель оправдана только там, где она реально ближе к правде. Сверьте граммы с тем, что было на тарелке.</p>' +
+      budgetLine() + '</div>';
   }
 })();
 </script>
