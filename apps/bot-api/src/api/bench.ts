@@ -279,6 +279,14 @@ function renderPage(): string {
   function n1(v) { return (Math.round(Number(v) * 10) / 10).toString(); }
   function money(usd) { return '$' + Number(usd).toFixed(5) + ' · ' + (Number(usd) * RATE).toFixed(3) + ' ₽'; }
 
+  // Цвет по уверенности: ниже 0.7 — тот самый порог, на котором в проде включается перепроверка
+  function confBadge(v, bare) {
+    if (v == null) return '<span class="badge err">—</span>';
+    var n = Number(v);
+    var cls = n >= 0.8 ? 'ok' : n >= 0.7 ? '' : 'err';
+    return '<span class="badge ' + cls + '">' + (bare ? '' : 'увер. ') + n.toFixed(2) + '</span>';
+  }
+
   // Список моделей: пустые строки и комментарии (#) отбрасываем
   function modelList() {
     return $('models').value.split('\\n').map(function (s) { return s.trim(); })
@@ -421,7 +429,14 @@ function renderPage(): string {
           render(card, label, d, Date.now() - t0);
           if (d && d.ok) {
             var kcal = ((d.result && d.result.items) || []).reduce(function (s, it) { return s + (+it.kcal || 0); }, 0);
-            results.push({ model: model, costUsd: d.costUsd, latencyMs: d.latencyMs, kcal: kcal });
+            results.push({
+              model: model,
+              costUsd: d.costUsd,
+              latencyMs: d.latencyMs,
+              kcal: kcal,
+              conf: d.result && d.result.overall_confidence != null ? Number(d.result.overall_confidence) : null,
+              dishes: ((d.result && d.result.items) || []).map(function (it) { return it.dish; }).join(', ')
+            });
           }
         })
         .catch(function (e) { render(card, label, { ok: false, error: String(e) }, Date.now() - t0); })
@@ -443,23 +458,41 @@ function renderPage(): string {
 
     var rows = items.map(function (it) {
       return '<tr><td>' + esc(it.dish) + '</td><td class="n">' + n1(it.grams) + ' г</td><td class="n">' + n1(it.kcal) +
-        '</td><td class="n">' + n1(it.protein) + ' / ' + n1(it.fat) + ' / ' + n1(it.carbs) + '</td></tr>';
+        '</td><td class="n">' + n1(it.protein) + ' / ' + n1(it.fat) + ' / ' + n1(it.carbs) + '</td>' +
+        '<td class="n">' + confBadge(it.confidence, true) + '</td></tr>';
     }).join('');
+
+    // Уверенность модели — главный показатель для каскада: по ней решается,
+    // отправлять ли фото на дорогую перепроверку
+    var conf = r.overall_confidence;
+    var confLine;
+    if (conf == null) {
+      var avg = items.length ? items.reduce(function (s, it) { return s + (+it.confidence || 0); }, 0) / items.length : null;
+      confLine = '<p class="small" style="margin-top:8px"><span class="badge err">уверенность не вернула</span> ' +
+        (avg != null ? '<span class="hint">по позициям в среднем ' + avg.toFixed(2) + ', но это может быть значение по умолчанию</span>' : '') +
+        '<br><span class="hint">С такой моделью каскад «дешёвая → дорогая по низкой уверенности» не заработает: нечему срабатывать.</span></p>';
+    } else {
+      confLine = '<p class="small" style="margin-top:8px">Уверенность модели: ' + confBadge(conf) + '</p>';
+    }
 
     card.innerHTML =
       '<div class="head"><span class="mono">' + esc(model) + '</span>' +
       '<span class="row"><span class="badge ok">' + money(d.costUsd) + '</span>' +
-      '<span class="badge">' + (wallMs / 1000).toFixed(1) + ' с</span></span></div>' +
+      // время берём серверное — то же, что в сводке; клиентское включало бы загрузку фото
+      '<span class="badge">' + ((d.latencyMs != null ? d.latencyMs : wallMs) / 1000).toFixed(1) + ' с</span>' +
+      (conf != null ? confBadge(conf) : '<span class="badge err">увер. —</span>') + '</span></div>' +
       (items.length
-        ? '<table><thead><tr><th>Блюдо</th><th class="n">Вес</th><th class="n">Ккал</th><th class="n">Б / Ж / У</th></tr></thead><tbody>' +
+        ? '<table><thead><tr><th>Блюдо</th><th class="n">Вес</th><th class="n">Ккал</th><th class="n">Б / Ж / У</th><th class="n">увер.</th></tr></thead><tbody>' +
           rows + '</tbody></table>' +
           '<p class="small" style="margin-top:8px"><b>Итого: ' + n1(sum.kcal) + ' ккал</b> · Б ' + n1(sum.p) +
           ' / Ж ' + n1(sum.f) + ' / У ' + n1(sum.c) + '</p>'
         : '<p class="hint small">Еда не распознана' + (r.error ? ' (' + esc(r.error) + ')' : '') + '</p>') +
-      '<p class="hint small" style="margin-top:6px">уверенность ' + (r.overall_confidence != null ? r.overall_confidence : '—') +
-      ' · токенов ' + ((d.usage && d.usage.promptTokens) || 0) + ' + ' + ((d.usage && d.usage.completionTokens) || 0) + '</p>' +
+      confLine +
+      '<p class="hint small">токенов ' + ((d.usage && d.usage.promptTokens) || 0) + ' + ' + ((d.usage && d.usage.completionTokens) || 0) + '</p>' +
       (r.comment ? '<p class="hint small" style="margin-top:6px">💬 ' + esc(r.comment) + '</p>' : '') +
-      (r.observed ? '<p class="hint small" style="margin-top:6px">👁 ' + esc(r.observed) + '</p>' : '');
+      (r.observed ? '<p class="hint small" style="margin-top:6px">👁 ' + esc(r.observed) + '</p>' : '') +
+      '<details style="margin-top:8px"><summary class="hint small">ответ модели целиком</summary>' +
+      '<pre class="mono" style="white-space:pre-wrap;margin-top:6px">' + esc(JSON.stringify(r, null, 2)) + '</pre></details>';
   }
 
   function budgetLine() {
@@ -475,9 +508,10 @@ function renderPage(): string {
     // Группируем по модели: при нескольких повторах видно и разброс внутри модели
     var by = {};
     res.forEach(function (r) {
-      if (!by[r.model]) by[r.model] = { model: r.model, cost: 0, ms: 0, n: 0, kcals: [] };
+      if (!by[r.model]) by[r.model] = { model: r.model, cost: 0, ms: 0, n: 0, kcals: [], confs: [], dishes: r.dishes };
       var g = by[r.model];
       g.cost += r.costUsd; g.ms += r.latencyMs; g.n += 1; g.kcals.push(r.kcal);
+      if (r.conf != null) g.confs.push(r.conf);
     });
     var groups = Object.keys(by).map(function (k) {
       var g = by[k];
@@ -485,16 +519,20 @@ function renderPage(): string {
       g.avgMs = g.ms / g.n;
       g.min = Math.min.apply(null, g.kcals);
       g.max = Math.max.apply(null, g.kcals);
+      g.avgConf = g.confs.length ? g.confs.reduce(function (s, c) { return s + c; }, 0) / g.confs.length : null;
       return g;
     });
 
     var rows = groups.slice().sort(function (a, b) { return a.avgCost - b.avgCost; }).map(function (g) {
       var spread = g.n > 1 ? Math.round(g.min) + '–' + Math.round(g.max) : Math.round(g.min);
-      return '<tr><td class="mono" style="font-size:12px">' + esc(g.model) + '</td>' +
+      return '<tr><td class="mono" style="font-size:12px">' + esc(g.model) + '<br><span class="hint" style="font-size:11px">' + esc(g.dishes) + '</span></td>' +
         '<td class="n">' + spread + '</td>' +
+        '<td class="n">' + confBadge(g.avgConf, true) + '</td>' +
         '<td class="n">' + money(g.avgCost) + '</td>' +
         '<td class="n">' + (g.avgMs / 1000).toFixed(1) + ' с</td></tr>';
     }).join('');
+
+    var noConf = groups.filter(function (g) { return g.avgConf == null; });
 
     var all = res.map(function (r) { return r.kcal; });
     var min = Math.min.apply(null, all), max = Math.max.apply(null, all);
@@ -502,8 +540,13 @@ function renderPage(): string {
     var wobbly = groups.filter(function (g) { return g.n > 1 && g.min > 0 && g.max / g.min >= 1.25; });
 
     $('sum').innerHTML = '<div class="card"><b>Итоги прогона</b>' +
-      '<table><thead><tr><th>Модель</th><th class="n">Ккал</th><th class="n">Цена</th><th class="n">Время</th></tr></thead><tbody>' +
+      '<table><thead><tr><th>Модель</th><th class="n">Ккал</th><th class="n">увер.</th><th class="n">Цена</th><th class="n">Время</th></tr></thead><tbody>' +
       rows + '</tbody></table>' +
+      (noConf.length
+        ? '<p class="small" style="margin-top:8px">⚠️ Не вернули уверенность: ' +
+          noConf.map(function (g) { return '<span class="mono">' + esc(g.model) + '</span>'; }).join(', ') +
+          ' — их нельзя ставить первой ступенью каскада, перепроверку нечем запускать.</p>'
+        : '') +
       '<p class="small" style="margin-top:8px">Разброс между всеми: ' + Math.round(min) + '–' + Math.round(max) + ' ккал' +
       (min > 0 ? ' (×' + (max / min).toFixed(1) + ')' : '') + ' · весь прогон ' + money(total) + '</p>' +
       (wobbly.length
