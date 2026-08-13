@@ -5,6 +5,7 @@
 // Доступ: GET /api/bench — открыт всем, пароля нет.
 // Баланс защищён единственным ограничителем: дневным потолком расходов стенда
 // (features.ts → BENCH_DAILY_USD_LIMIT). Страница закрыта от индексации.
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { config } from "../config.js";
@@ -27,9 +28,7 @@ const DEFAULT_MODELS = [
   "# дешевле текущей",
   "google/gemini-2.5-flash-lite",
   "qwen/qwen2.5-vl-72b-instruct",
-  "qwen/qwen-2.5-vl-7b-instruct",
-  "# бесплатные: денег не стоят, но отвечают медленнее и чаще отказывают",
-  "qwen/qwen-2.5-vl-7b-instruct:free",
+  "# бесплатные: денег не стоят, но отвечают медленнее и часто отвечают 429",
   "google/gemma-4-26b-a4b-it:free",
   "nvidia/nemotron-nano-12b-v2-vl:free",
   "# дороже — проверяем, окупается ли качеством",
@@ -42,6 +41,28 @@ const DEFAULT_MODELS = [
 
 // Один вызов должен уложиться в лимит serverless-функции (60 с) с запасом на сеть
 const BENCH_TIMEOUT_MS = 25_000;
+
+// Фото загружается один раз и хранится в БД, а прогоны ссылаются на него по id.
+// Иначе на каждую модель уходит своя копия картинки — с телефона это мегабайты
+// на один прогон, и часть запросов обрывается на полпути.
+let benchImageTableReady = false;
+async function ensureBenchImageTable(): Promise<void> {
+  if (benchImageTableReady) return;
+  await prisma.$executeRawUnsafe(
+    `CREATE TABLE IF NOT EXISTS "BenchImage" ("id" TEXT PRIMARY KEY, "dataUrl" TEXT NOT NULL, "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now())`
+  );
+  // Прогон идёт сразу после загрузки, так что двух часов хватает с запасом
+  await prisma.$executeRawUnsafe(`DELETE FROM "BenchImage" WHERE "createdAt" < now() - interval '2 hours'`);
+  benchImageTableReady = true;
+}
+
+/** Страница открыта всем, поэтому загрузку ограничиваем — иначе базу зальют картинками. */
+async function benchImagesLastHour(): Promise<number> {
+  const rows = await prisma.$queryRaw<Array<{ n: bigint }>>`
+    SELECT count(*)::bigint AS n FROM "BenchImage" WHERE "createdAt" > now() - interval '1 hour'`;
+  return Number(rows[0]?.n ?? 0);
+}
+const MAX_IMAGES_PER_HOUR = 100;
 
 /** Сколько стенд потратил за текущие сутки (UTC). Считается по учёту расходов. */
 async function spentTodayUsd(): Promise<number> {
@@ -133,18 +154,45 @@ export function registerBenchRoutes(app: FastifyInstance): void {
     }
   });
 
+  // --- Загрузка фото: один раз на весь прогон ---
+  app.post("/api/bench/upload", { bodyLimit: 12 * 1024 * 1024 }, async (request, reply) => {
+    const parsed = z.object({ imageDataUrl: z.string().startsWith("data:image/").max(10_000_000) }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "bad_request" });
+    try {
+      await ensureBenchImageTable();
+      if ((await benchImagesLastHour()) >= MAX_IMAGES_PER_HOUR) {
+        return reply.code(429).send({ error: "too_many_uploads", detail: "Слишком много загрузок за час, попробуйте позже." });
+      }
+      const id = randomUUID();
+      await prisma.$executeRaw`INSERT INTO "BenchImage" ("id", "dataUrl") VALUES (${id}, ${parsed.data.imageDataUrl})`;
+      return { imageId: id };
+    } catch (err) {
+      logger.error({ err: String(err) }, "bench image upload failed");
+      return reply.code(500).send({ error: "upload_failed" });
+    }
+  });
+
   // --- Прогон одного фото через одну модель ---
   // Одна модель на запрос: семь моделей в одной функции не уложились бы в 60 секунд.
   app.post("/api/bench/run", { bodyLimit: 12 * 1024 * 1024 }, async (request, reply) => {
     const parsed = z
       .object({
         model: z.string().min(1).max(120),
-        imageDataUrl: z.string().startsWith("data:image/"),
+        // либо ссылка на загруженное фото, либо картинка целиком (совместимость)
+        imageId: z.string().uuid().optional(),
+        imageDataUrl: z.string().startsWith("data:image/").optional(),
         caption: z.string().max(300).optional()
       })
       .safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "bad_request" });
-    const { model, imageDataUrl, caption } = parsed.data;
+    const { model, imageId, caption } = parsed.data;
+
+    let imageDataUrl = parsed.data.imageDataUrl;
+    if (!imageDataUrl && imageId) {
+      const rows = await prisma.$queryRaw<Array<{ dataUrl: string }>>`SELECT "dataUrl" FROM "BenchImage" WHERE "id" = ${imageId}`;
+      imageDataUrl = rows[0]?.dataUrl;
+    }
+    if (!imageDataUrl) return reply.code(400).send({ error: "image_not_found" });
 
     // Единственная защита открытой страницы: дневной потолок расходов стенда
     const spent = await spentTodayUsd();
@@ -334,6 +382,7 @@ function renderPage(): string {
   var RATE = ${rate};
   var DEFAULTS = ${models};
   var img = null;
+  var imageId = null; // id загруженного фото: прогоны ссылаются на него, а не таскают картинку
   var budget = null; // {spentTodayUsd, limitUsd} — приходит с каждым ответом прогона
   var log = []; // записи прогонов вместе с оценками — из них собирается лог для чата
 
@@ -379,6 +428,7 @@ function renderPage(): string {
         c.height = Math.round(im.height * k);
         c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
         img = c.toDataURL('image/jpeg', 0.85);
+        imageId = null;
         $('prev').src = img;
         $('prev').style.display = 'block';
       };
@@ -454,6 +504,21 @@ function renderPage(): string {
       .catch(function () { $('found').innerHTML = '<div class="hint small">Не удалось получить каталог</div>'; });
   }
 
+  // Один платный запрос может оборваться на мобильной связи — даём ему второй шанс,
+  // прежде чем записать модель в неудачники
+  function runOnce(model, attempt) {
+    return fetch('/api/bench/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: model, imageId: imageId, caption: $('caption').value })
+    })
+      .then(function (r) { return r.json(); })
+      .catch(function (e) {
+        if (attempt < 2) return runOnce(model, attempt + 1); // обрыв связи — повторяем один раз
+        return { ok: false, error: 'связь оборвалась: ' + String(e) };
+      });
+  }
+
   $('run').addEventListener('click', function () {
     if (!img) { alert('Сначала выберите фото'); return; }
     var models = modelList();
@@ -472,15 +537,37 @@ function renderPage(): string {
     var results = [];
     log = [];
 
+    // Фото уходит на сервер один раз, дальше прогоны ссылаются на него по id
+    var ready = imageId
+      ? Promise.resolve()
+      : (function () {
+          $('run').textContent = 'Загружаю фото…';
+          return fetch('/api/bench/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ imageDataUrl: img })
+          })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+              if (!d || !d.imageId) throw new Error('сервер не принял фото');
+              imageId = d.imageId;
+            });
+        })();
+
     // По очереди время ответа честное; в параллельном режиме запросы конкурируют,
     // поэтому латентность слегка завышается — зато прогон вдвое-втрое короче
     var lanes = Number($('mode').value) || 1;
     var i = 0;
     var done = 0;
 
+    var finished = 0;
+    function progress() {
+      $('run').textContent = finished >= jobs.length ? 'Прогнать' : 'Готово ' + finished + ' из ' + jobs.length + '…';
+    }
+
     function next() {
       if (i >= jobs.length) {
-        if (++done >= lanes) { $('run').disabled = false; summary(results); }
+        if (++done >= lanes) { $('run').disabled = false; $('run').textContent = 'Прогнать'; summary(results); }
         return;
       }
       var job = jobs[i++];
@@ -494,13 +581,10 @@ function renderPage(): string {
       card.innerHTML = '<div class="head"><span class="mono">' + esc(label) + '</span><span class="badge"><span class="spin"></span> идёт</span></div>';
       $('out').appendChild(card);
       var t0 = Date.now();
-      fetch('/api/bench/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: model, imageDataUrl: img, caption: $('caption').value })
-      })
-        .then(function (r) { return r.json(); })
+      runOnce(model, 1)
         .then(function (d) {
+          finished++;
+          progress();
           if (d && d.limitUsd != null) budget = { spent: d.spentTodayUsd, limit: d.limitUsd };
           fillEntry(entry, d);
           render(card, label, d, Date.now() - t0, entry);
@@ -518,6 +602,8 @@ function renderPage(): string {
           }
         })
         .catch(function (e) {
+          finished++;
+          progress();
           var failed = { ok: false, error: String(e) };
           fillEntry(entry, failed);
           render(card, label, failed, Date.now() - t0, entry);
@@ -526,7 +612,17 @@ function renderPage(): string {
         .then(next);
     }
 
-    for (var lane = 0; lane < lanes; lane++) next();
+    // Ждём загрузку фото, потом запускаем дорожки
+    ready
+      .then(function () {
+        progress();
+        for (var lane = 0; lane < lanes; lane++) next();
+      })
+      .catch(function (e) {
+        $('run').disabled = false;
+        $('run').textContent = 'Прогнать';
+        alert('Не удалось загрузить фото: ' + String(e));
+      });
   });
 
   function render(card, model, d, wallMs, entry) {
