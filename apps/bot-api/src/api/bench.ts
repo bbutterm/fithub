@@ -16,19 +16,18 @@ import { foodResponseSchema } from "../ai/food.js";
 import { buildPhotoHint, JSON_RETRY_PROMPT, VISION_SYSTEM_PROMPT } from "../prompts/vision.js";
 
 /**
- * Кандидаты по умолчанию. Список правится прямо на странице, строки с «#» — комментарии.
- * Две последние модели стоят дорого и нужны как эталон: с чем сравнивать дешёвые.
+ * Кандидаты по умолчанию — только проверенные на практике имена.
+ * Остальные модели добавляются на странице из живого каталога провайдера:
+ * угадывать имена по обзорам бессмысленно, они не совпадают.
+ * Строки с «#» — комментарии.
  */
 const DEFAULT_MODELS = [
   "# ваши текущие",
   config.VISION_MODEL,
   config.VISION_MODEL_FALLBACK,
-  "# распознали батат",
+  "# показали себя лучше",
   "minimax/minimax-m3",
-  "google/gemini-3.6-flash",
-  "# эталон: топовые, для сравнения",
-  "xiaomi/mimo-v2.5-pro",
-  "qwen/qwen3.6-plus"
+  "google/gemini-3.6-flash"
 ];
 
 // Один вызов должен уложиться в лимит serverless-функции (60 с) с запасом на сеть
@@ -116,7 +115,7 @@ export function registerBenchRoutes(app: FastifyInstance): void {
         }))
         .filter((m) => m.id)
         .sort((a, b) => a.inPer1M - b.inPer1M)
-        .slice(0, 60);
+        .slice(0, 200);
       return { models };
     } catch (err) {
       logger.warn({ err: String(err) }, "bench models list failed");
@@ -237,7 +236,7 @@ function renderPage(): string {
 <body>
 <div class="wrap">
   <h1>Стенд моделей</h1>
-  <p class="hint">Одно фото — семь моделей. Цена и время берутся фактические, из ответа провайдера. Расходы ограничены дневным потолком.</p>
+  <p class="hint">Одно фото — сколько угодно моделей. Цена и время берутся фактические, из ответа провайдера. Расходы ограничены дневным потолком.</p>
 
   <div class="card" style="margin-top:12px">
     <label class="f"><span>Фото еды</span><input type="file" id="file" accept="image/*" /></label>
@@ -245,17 +244,23 @@ function renderPage(): string {
     <label class="f" style="margin-top:10px"><span>Подпись (необязательно — как подпись к фото в боте)</span>
       <input type="text" id="caption" placeholder="борщ с хлебом" /></label>
     <label class="f"><span>Модели — по одной в строке, строки с # игнорируются</span><textarea id="models"></textarea></label>
+    <label class="f"><span>Повторов каждой моделью (разброс между запусками бывает больше, чем между моделями)</span>
+      <select id="repeats"><option value="1">1 — быстро</option><option value="2">2</option><option value="3">3 — видно разброс</option></select></label>
     <div class="row">
       <button id="run">Прогнать</button>
       <button id="check" class="sec">Проверить имена</button>
-      <button id="find" class="sec">Найти модели</button>
+      <button id="find" class="sec">Каталог моделей</button>
       <button id="reset" class="sec">Список по умолчанию</button>
     </div>
     <div id="checked" class="small" style="margin-top:10px"></div>
     <div id="finder" style="display:none">
-      <label class="f" style="margin-top:12px"><span>Поиск по имени (только модели с поддержкой картинок)</span>
-        <input type="text" id="q" placeholder="qwen, gemini, minimax…" /></label>
+      <p class="hint small" style="margin-top:12px">Все модели провайдера, которые принимают картинки, с актуальными ценами за 1M токенов. Отметьте нужные и добавьте в список.</p>
+      <div class="row" style="margin:8px 0">
+        <input type="text" id="q" placeholder="qwen, gemini, minimax…" style="flex:1" />
+        <button id="sort" class="sec">Сначала дорогие</button>
+      </div>
       <div class="list" id="found"></div>
+      <button id="addSel" style="margin-top:10px">Добавить отмеченные</button>
     </div>
   </div>
 
@@ -341,33 +346,53 @@ function renderPage(): string {
     t = setTimeout(function () { loadModels($('q').value); }, 350);
   });
 
+  var descending = false; // порядок каталога: дешёвые сверху или дорогие
+  $('sort').addEventListener('click', function () {
+    descending = !descending;
+    $('sort').textContent = descending ? 'Сначала дешёвые' : 'Сначала дорогие';
+    loadModels($('q').value);
+  });
+
+  $('addSel').addEventListener('click', function () {
+    var picked = Array.prototype.slice.call($('found').querySelectorAll('input:checked')).map(function (c) { return c.value; });
+    if (!picked.length) { alert('Ничего не отмечено'); return; }
+    var lines = $('models').value.split('\\n');
+    var have = lines.map(function (s) { return s.trim(); });
+    picked.forEach(function (id) { if (have.indexOf(id) === -1) lines.push(id); });
+    $('models').value = lines.join('\\n');
+    localStorage.setItem('benchModels', $('models').value);
+    $('checked').innerHTML = '<span class="badge ok">добавлено моделей: ' + picked.length + '</span>';
+  });
+
   function loadModels(q) {
-    $('found').innerHTML = '<div class="hint small">Загружаю…</div>';
+    $('found').innerHTML = '<div class="hint small">Загружаю каталог…</div>';
     fetch('/api/bench/models?q=' + encodeURIComponent(q))
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        if (!d.models || !d.models.length) { $('found').innerHTML = '<div class="hint small">Ничего не найдено</div>'; return; }
-        $('found').innerHTML = d.models.map(function (m) {
-          return '<div data-id="' + esc(m.id) + '"><span class="mono">' + esc(m.id) + '</span>' +
+        if (d && d.error) { $('found').innerHTML = '<div class="hint small">Каталог недоступен (' + esc(d.error) + '). Попробуйте ещё раз.</div>'; return; }
+        var list = (d && d.models) || [];
+        if (!list.length) { $('found').innerHTML = '<div class="hint small">Ничего не найдено</div>'; return; }
+        if (descending) list = list.slice().reverse();
+        $('found').innerHTML = list.map(function (m) {
+          return '<div><label style="display:flex;gap:8px;align-items:center;flex:1;cursor:pointer">' +
+            '<input type="checkbox" value="' + esc(m.id) + '" />' +
+            '<span class="mono">' + esc(m.id) + '</span></label>' +
             '<span class="badge">$' + m.inPer1M.toFixed(3) + ' / $' + m.outPer1M.toFixed(3) + '</span></div>';
         }).join('');
-        Array.prototype.forEach.call($('found').children, function (el) {
-          el.addEventListener('click', function () {
-            var id = el.getAttribute('data-id');
-            var cur = $('models').value.split('\\n').map(function (s) { return s.trim(); }).filter(Boolean);
-            if (cur.indexOf(id) === -1) cur.push(id); // комментарии сохраняем как есть
-            $('models').value = cur.join('\\n');
-            localStorage.setItem('benchModels', $('models').value);
-          });
-        });
       })
-      .catch(function () { $('found').innerHTML = '<div class="hint small">Не удалось получить список</div>'; });
+      .catch(function () { $('found').innerHTML = '<div class="hint small">Не удалось получить каталог</div>'; });
   }
 
   $('run').addEventListener('click', function () {
     if (!img) { alert('Сначала выберите фото'); return; }
     var models = modelList();
     if (!models.length) { alert('Список моделей пуст'); return; }
+    var repeats = Number($('repeats').value) || 1;
+    var jobs = [];
+    models.forEach(function (m) {
+      for (var k = 1; k <= repeats; k++) jobs.push({ model: m, run: k, of: repeats });
+    });
+
     $('run').disabled = true;
     $('out').innerHTML = '';
     $('sum').innerHTML = '';
@@ -376,11 +401,13 @@ function renderPage(): string {
     // Строго по очереди: так видно, кто отвечает быстро, и не бьём провайдера пачкой
     var i = 0;
     (function next() {
-      if (i >= models.length) { $('run').disabled = false; summary(results); return; }
-      var model = models[i++];
+      if (i >= jobs.length) { $('run').disabled = false; summary(results); return; }
+      var job = jobs[i++];
+      var model = job.model;
+      var label = model + (job.of > 1 ? ' · прогон ' + job.run + '/' + job.of : '');
       var card = document.createElement('div');
       card.className = 'card';
-      card.innerHTML = '<div class="head"><span class="mono">' + esc(model) + '</span><span class="badge"><span class="spin"></span> идёт</span></div>';
+      card.innerHTML = '<div class="head"><span class="mono">' + esc(label) + '</span><span class="badge"><span class="spin"></span> идёт</span></div>';
       $('out').appendChild(card);
       var t0 = Date.now();
       fetch('/api/bench/run', {
@@ -391,10 +418,13 @@ function renderPage(): string {
         .then(function (r) { return r.json(); })
         .then(function (d) {
           if (d && d.limitUsd != null) budget = { spent: d.spentTodayUsd, limit: d.limitUsd };
-          render(card, model, d, Date.now() - t0);
-          if (d && d.ok) results.push(d);
+          render(card, label, d, Date.now() - t0);
+          if (d && d.ok) {
+            var kcal = ((d.result && d.result.items) || []).reduce(function (s, it) { return s + (+it.kcal || 0); }, 0);
+            results.push({ model: model, costUsd: d.costUsd, latencyMs: d.latencyMs, kcal: kcal });
+          }
         })
-        .catch(function (e) { render(card, model, { ok: false, error: String(e) }, Date.now() - t0); })
+        .catch(function (e) { render(card, label, { ok: false, error: String(e) }, Date.now() - t0); })
         .then(next);
     })();
   });
@@ -440,20 +470,47 @@ function renderPage(): string {
   }
 
   function summary(res) {
-    if (res.length < 2) { if (budget) $('sum').innerHTML = '<div class="card">' + budgetLine() + '</div>'; return; }
-    var byCost = res.slice().sort(function (a, b) { return a.costUsd - b.costUsd; });
-    var byTime = res.slice().sort(function (a, b) { return a.latencyMs - b.latencyMs; });
-    var kcal = res.map(function (d) {
-      return (d.result && d.result.items || []).reduce(function (s, i) { return s + (+i.kcal || 0); }, 0);
+    if (!res.length) { if (budget) $('sum').innerHTML = '<div class="card">' + budgetLine() + '</div>'; return; }
+
+    // Группируем по модели: при нескольких повторах видно и разброс внутри модели
+    var by = {};
+    res.forEach(function (r) {
+      if (!by[r.model]) by[r.model] = { model: r.model, cost: 0, ms: 0, n: 0, kcals: [] };
+      var g = by[r.model];
+      g.cost += r.costUsd; g.ms += r.latencyMs; g.n += 1; g.kcals.push(r.kcal);
     });
-    var min = Math.min.apply(null, kcal), max = Math.max.apply(null, kcal);
-    var total = res.reduce(function (s, d) { return s + d.costUsd; }, 0);
+    var groups = Object.keys(by).map(function (k) {
+      var g = by[k];
+      g.avgCost = g.cost / g.n;
+      g.avgMs = g.ms / g.n;
+      g.min = Math.min.apply(null, g.kcals);
+      g.max = Math.max.apply(null, g.kcals);
+      return g;
+    });
+
+    var rows = groups.slice().sort(function (a, b) { return a.avgCost - b.avgCost; }).map(function (g) {
+      var spread = g.n > 1 ? Math.round(g.min) + '–' + Math.round(g.max) : Math.round(g.min);
+      return '<tr><td class="mono" style="font-size:12px">' + esc(g.model) + '</td>' +
+        '<td class="n">' + spread + '</td>' +
+        '<td class="n">' + money(g.avgCost) + '</td>' +
+        '<td class="n">' + (g.avgMs / 1000).toFixed(1) + ' с</td></tr>';
+    }).join('');
+
+    var all = res.map(function (r) { return r.kcal; });
+    var min = Math.min.apply(null, all), max = Math.max.apply(null, all);
+    var total = res.reduce(function (s, r) { return s + r.costUsd; }, 0);
+    var wobbly = groups.filter(function (g) { return g.n > 1 && g.min > 0 && g.max / g.min >= 1.25; });
+
     $('sum').innerHTML = '<div class="card"><b>Итоги прогона</b>' +
-      '<p class="small" style="margin-top:8px">Дешевле всех: <span class="mono">' + esc(byCost[0].model) + '</span> — ' + money(byCost[0].costUsd) + '</p>' +
-      '<p class="small">Быстрее всех: <span class="mono">' + esc(byTime[0].model) + '</span> — ' + (byTime[0].latencyMs / 1000).toFixed(1) + ' с</p>' +
-      '<p class="small">Разброс по калориям: ' + Math.round(min) + '–' + Math.round(max) + ' ккал' +
-      (min > 0 ? ' (×' + (max / min).toFixed(1) + ')' : '') + '</p>' +
-      '<p class="small">Весь прогон обошёлся в ' + money(total) + '</p>' +
+      '<table><thead><tr><th>Модель</th><th class="n">Ккал</th><th class="n">Цена</th><th class="n">Время</th></tr></thead><tbody>' +
+      rows + '</tbody></table>' +
+      '<p class="small" style="margin-top:8px">Разброс между всеми: ' + Math.round(min) + '–' + Math.round(max) + ' ккал' +
+      (min > 0 ? ' (×' + (max / min).toFixed(1) + ')' : '') + ' · весь прогон ' + money(total) + '</p>' +
+      (wobbly.length
+        ? '<p class="small" style="margin-top:8px">⚠️ Сама с собой не сходится: ' +
+          wobbly.map(function (g) { return '<span class="mono">' + esc(g.model) + '</span>'; }).join(', ') +
+          ' — на одном и том же фото разные ответы. Такую модель нельзя судить по одному прогону.</p>'
+        : '') +
       '<p class="hint small" style="margin-top:8px">Дорогая модель оправдана только там, где она реально ближе к правде. Сверьте граммы с тем, что было на тарелке.</p>' +
       budgetLine() + '</div>';
   }
