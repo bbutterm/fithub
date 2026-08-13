@@ -15,15 +15,20 @@ import { visionClient, type ChatMessage } from "../lib/ai.js";
 import { foodResponseSchema } from "../ai/food.js";
 import { buildPhotoHint, JSON_RETRY_PROMPT, VISION_SYSTEM_PROMPT } from "../prompts/vision.js";
 
-/** Кандидаты по умолчанию. Список правится прямо на странице — имена моделей можно найти поиском. */
+/**
+ * Кандидаты по умолчанию. Список правится прямо на странице, строки с «#» — комментарии.
+ * Две последние модели стоят дорого и нужны как эталон: с чем сравнивать дешёвые.
+ */
 const DEFAULT_MODELS = [
+  "# ваши текущие",
   config.VISION_MODEL,
   config.VISION_MODEL_FALLBACK,
-  "qwen/qwen3.7-flash",
-  "qwen/qwen3-vl-flash",
+  "# распознали батат",
   "minimax/minimax-m3",
-  "google/gemini-2.5-flash",
-  "google/gemini-3.6-flash"
+  "google/gemini-3.6-flash",
+  "# эталон: топовые, для сравнения",
+  "xiaomi/mimo-v2.5-pro",
+  "qwen/qwen3.6-plus"
 ];
 
 // Один вызов должен уложиться в лимит serverless-функции (60 с) с запасом на сеть
@@ -60,7 +65,14 @@ export function registerBenchRoutes(app: FastifyInstance): void {
   // --- Список доступных моделей провайдера с актуальными ценами ---
   // Снимает главную боль: точные имена моделей меняются, гадать не нужно.
   app.get("/api/bench/models", async (request, reply) => {
-    const q = ((request.query as { q?: string }).q ?? "").trim().toLowerCase();
+    const query = request.query as { q?: string; ids?: string };
+    const q = (query.q ?? "").trim().toLowerCase();
+    // ?ids=a,b,c — проверка конкретных имён: существуют ли и принимают ли картинки.
+    // Нужна, чтобы опечатка в имени выяснялась до прогона, а не молчаливым отказом.
+    const ids = (query.ids ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     try {
       const res = await fetch(`${config.VISION_BASE_URL}/models`, {
         headers: { Authorization: `Bearer ${config.VISION_API_KEY}` },
@@ -74,7 +86,25 @@ export function registerBenchRoutes(app: FastifyInstance): void {
           pricing?: { prompt?: string; completion?: string };
         }>;
       };
-      const models = (data.data ?? [])
+      const all = data.data ?? [];
+
+      if (ids.length) {
+        const byId = new Map(all.map((m) => [m.id ?? "", m]));
+        return {
+          checked: ids.map((id) => {
+            const m = byId.get(id);
+            return {
+              id,
+              exists: Boolean(m),
+              image: Boolean(m?.architecture?.input_modalities?.includes("image")),
+              inPer1M: Number(m?.pricing?.prompt ?? 0) * 1e6,
+              outPer1M: Number(m?.pricing?.completion ?? 0) * 1e6
+            };
+          })
+        };
+      }
+
+      const models = all
         // только те, что принимают картинки — остальные для распознавания еды бесполезны
         .filter((m) => m.architecture?.input_modalities?.includes("image"))
         .filter((m) => (q ? (m.id ?? "").toLowerCase().includes(q) : true))
@@ -214,12 +244,14 @@ function renderPage(): string {
     <img id="prev" class="prev" style="display:none" alt="" />
     <label class="f" style="margin-top:10px"><span>Подпись (необязательно — как подпись к фото в боте)</span>
       <input type="text" id="caption" placeholder="борщ с хлебом" /></label>
-    <label class="f"><span>Модели — по одной в строке</span><textarea id="models"></textarea></label>
+    <label class="f"><span>Модели — по одной в строке, строки с # игнорируются</span><textarea id="models"></textarea></label>
     <div class="row">
       <button id="run">Прогнать</button>
+      <button id="check" class="sec">Проверить имена</button>
       <button id="find" class="sec">Найти модели</button>
       <button id="reset" class="sec">Список по умолчанию</button>
     </div>
+    <div id="checked" class="small" style="margin-top:10px"></div>
     <div id="finder" style="display:none">
       <label class="f" style="margin-top:12px"><span>Поиск по имени (только модели с поддержкой картинок)</span>
         <input type="text" id="q" placeholder="qwen, gemini, minimax…" /></label>
@@ -241,6 +273,12 @@ function renderPage(): string {
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function n1(v) { return (Math.round(Number(v) * 10) / 10).toString(); }
   function money(usd) { return '$' + Number(usd).toFixed(5) + ' · ' + (Number(usd) * RATE).toFixed(3) + ' ₽'; }
+
+  // Список моделей: пустые строки и комментарии (#) отбрасываем
+  function modelList() {
+    return $('models').value.split('\\n').map(function (s) { return s.trim(); })
+      .filter(function (s) { return s && s.charAt(0) !== '#'; });
+  }
 
   var saved = localStorage.getItem('benchModels');
   $('models').value = saved || DEFAULTS.join('\\n');
@@ -273,6 +311,25 @@ function renderPage(): string {
     fr.readAsDataURL(f);
   });
 
+  // Проверка имён без единого платного вызова: сверяем список с каталогом провайдера
+  $('check').addEventListener('click', function () {
+    var list = modelList();
+    if (!list.length) { alert('Список моделей пуст'); return; }
+    $('checked').innerHTML = '<span class="hint">Проверяю…</span>';
+    fetch('/api/bench/models?ids=' + encodeURIComponent(list.join(',')))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.checked) { $('checked').innerHTML = '<span class="hint">Не удалось проверить</span>'; return; }
+        $('checked').innerHTML = d.checked.map(function (m) {
+          if (!m.exists) return '<div><span class="badge err">нет такой</span> <span class="mono">' + esc(m.id) + '</span></div>';
+          if (!m.image) return '<div><span class="badge err">без картинок</span> <span class="mono">' + esc(m.id) + '</span></div>';
+          return '<div><span class="badge ok">есть</span> <span class="mono">' + esc(m.id) + '</span> <span class="badge">$' +
+            m.inPer1M.toFixed(3) + ' / $' + m.outPer1M.toFixed(3) + '</span></div>';
+        }).join('');
+      })
+      .catch(function () { $('checked').innerHTML = '<span class="hint">Не удалось проверить</span>'; });
+  });
+
   $('find').addEventListener('click', function () {
     var box = $('finder');
     box.style.display = box.style.display === 'none' ? 'block' : 'none';
@@ -298,7 +355,7 @@ function renderPage(): string {
           el.addEventListener('click', function () {
             var id = el.getAttribute('data-id');
             var cur = $('models').value.split('\\n').map(function (s) { return s.trim(); }).filter(Boolean);
-            if (cur.indexOf(id) === -1) cur.push(id);
+            if (cur.indexOf(id) === -1) cur.push(id); // комментарии сохраняем как есть
             $('models').value = cur.join('\\n');
             localStorage.setItem('benchModels', $('models').value);
           });
@@ -309,7 +366,7 @@ function renderPage(): string {
 
   $('run').addEventListener('click', function () {
     if (!img) { alert('Сначала выберите фото'); return; }
-    var models = $('models').value.split('\\n').map(function (s) { return s.trim(); }).filter(Boolean);
+    var models = modelList();
     if (!models.length) { alert('Список моделей пуст'); return; }
     $('run').disabled = true;
     $('out').innerHTML = '';
