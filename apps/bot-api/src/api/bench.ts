@@ -206,6 +206,12 @@ function renderConfigCard(): string {
       ${row("голосовые", config.AUDIO_MODEL)}
       ${row("тексты и советы", config.TEXT_MODEL)}
       ${row("провайдеры", `${host(config.VISION_BASE_URL)} · ${host(config.TEXT_BASE_URL)}`)}
+      ${row(
+        "CRON_SECRET",
+        config.CRON_SECRET
+          ? "задан"
+          : `<span class="badge err">не задан</span> — /api/cron/* открыты всем`
+      )}
     </table>
     ${
       same
