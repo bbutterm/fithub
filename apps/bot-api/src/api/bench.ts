@@ -186,6 +186,35 @@ export function registerBenchRoutes(app: FastifyInstance): void {
   });
 }
 
+/** Что реально настроено на этом деплое — чтобы не угадывать по логам. Секретов здесь нет. */
+function renderConfigCard(): string {
+  const host = (url: string) => {
+    try {
+      return new URL(url).host;
+    } catch {
+      return url;
+    }
+  };
+  const same = config.VISION_MODEL === config.VISION_MODEL_FALLBACK;
+  const row = (k: string, v: string) => `<tr><td class="hint">${k}</td><td class="mono">${v}</td></tr>`;
+  return `<div class="card">
+    <b>Что настроено на этом деплое</b>
+    <table style="margin-top:6px">
+      ${row("фото, основная", config.VISION_MODEL)}
+      ${row("фото, перепроверка", config.VISION_MODEL_FALLBACK)}
+      ${row("порог перепроверки", String(config.VISION_FALLBACK_THRESHOLD))}
+      ${row("голосовые", config.AUDIO_MODEL)}
+      ${row("тексты и советы", config.TEXT_MODEL)}
+      ${row("провайдеры", `${host(config.VISION_BASE_URL)} · ${host(config.TEXT_BASE_URL)}`)}
+    </table>
+    ${
+      same
+        ? `<p class="small" style="margin-top:8px"><span class="badge err">внимание</span> Основная и запасная модели совпадают — перепроверка переспрашивает ту же самую модель и смысла не имеет.</p>`
+        : ""
+    }
+  </div>`;
+}
+
 function renderPage(): string {
   const models = JSON.stringify(DEFAULT_MODELS);
   const rate = config.USD_RUB_RATE;
@@ -243,6 +272,7 @@ function renderPage(): string {
 <div class="wrap">
   <h1>Стенд моделей</h1>
   <p class="hint">Одно фото — сколько угодно моделей. Цена и время берутся фактические, из ответа провайдера. Расходы ограничены дневным потолком.</p>
+  ${renderConfigCard()}
 
   <div class="card" style="margin-top:12px">
     <label class="f"><span>Фото еды</span><input type="file" id="file" accept="image/*" /></label>
