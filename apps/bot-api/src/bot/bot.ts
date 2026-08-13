@@ -365,6 +365,25 @@ bot.on("message:voice", async (ctx) => {
     await ctx.reply("Слишком много запросов подряд 🙈 Подожди минутку.");
     return;
   }
+
+  // Расшифровка — платный вызов аудио-модели, поэтому лимит проверяем ДО неё.
+  // Исключение: при наличии недавней записи голосовое обычно уточняет её, а уточнения
+  // лимит не расходуют (как и текстовые) — такие сообщения пропускаем дальше.
+  const voiceLimit = await checkRecognitionLimit(user);
+  if (!voiceLimit.allowed) {
+    const recentMeal = await prisma.meal.findFirst({
+      where: { userId: user.id, eatenAt: { gte: new Date(Date.now() - 2 * 3600 * 1000) } },
+      select: { id: true }
+    });
+    if (!recentMeal) {
+      await ctx.reply(limitReachedText(voiceLimit.limit ?? config.FREE_PHOTOS_PER_DAY), {
+        parse_mode: "HTML",
+        reply_markup: paywallKeyboard()
+      });
+      return;
+    }
+  }
+
   const status = await ctx.reply("Слушаю… 🎙");
   let transcript = "";
   try {
