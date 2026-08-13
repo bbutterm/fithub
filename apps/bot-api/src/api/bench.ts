@@ -22,15 +22,22 @@ import { buildPhotoHint, JSON_RETRY_PROMPT, VISION_SYSTEM_PROMPT } from "../prom
  * Строки с «#» — комментарии.
  */
 const DEFAULT_MODELS = [
-  "# ваши текущие",
+  "# ваша текущая",
   config.VISION_MODEL,
-  config.VISION_MODEL_FALLBACK,
-  "# показали себя лучше",
-  "minimax/minimax-m3",
-  "google/gemini-3.6-flash",
-  "# дешевле Gemini 3.6, та же семья",
-  config.AUDIO_MODEL, // уже работает в проде на голосовых — имя точно верное
-  "google/gemini-2.5-flash-lite"
+  "# дешевле текущей",
+  "google/gemini-2.5-flash-lite",
+  "qwen/qwen2.5-vl-72b-instruct",
+  "qwen/qwen-2.5-vl-7b-instruct",
+  "# бесплатные: денег не стоят, но отвечают медленнее и чаще отказывают",
+  "qwen/qwen-2.5-vl-7b-instruct:free",
+  "google/gemma-4-26b-a4b-it:free",
+  "nvidia/nemotron-nano-12b-v2-vl:free",
+  "# дороже — проверяем, окупается ли качеством",
+  "google/gemini-3.1-flash-lite",
+  "google/gemini-3.5-flash-lite",
+  "bytedance-seed/seed-2-1-turbo",
+  "qwen/qwen3-vl-235b-a22b-thinking",
+  "google/gemini-3.6-flash"
 ];
 
 // Один вызов должен уложиться в лимит serverless-функции (60 с) с запасом на сеть
@@ -290,6 +297,11 @@ function renderPage(): string {
     <label class="f"><span>Модели — по одной в строке, строки с # игнорируются</span><textarea id="models"></textarea></label>
     <label class="f"><span>Повторов каждой моделью (разброс между запусками бывает больше, чем между моделями)</span>
       <select id="repeats"><option value="1">1 — быстро</option><option value="2">2</option><option value="3">3 — видно разброс</option></select></label>
+    <label class="f"><span>Как гнать</span>
+      <select id="mode">
+        <option value="1">по очереди — честное время ответа</option>
+        <option value="3">по 3 сразу — втрое быстрее, время чуть завышено</option>
+      </select></label>
     <div class="row">
       <button id="run">Прогнать</button>
       <button id="check" class="sec">Проверить имена</button>
@@ -460,10 +472,17 @@ function renderPage(): string {
     var results = [];
     log = [];
 
-    // Строго по очереди: так видно, кто отвечает быстро, и не бьём провайдера пачкой
+    // По очереди время ответа честное; в параллельном режиме запросы конкурируют,
+    // поэтому латентность слегка завышается — зато прогон вдвое-втрое короче
+    var lanes = Number($('mode').value) || 1;
     var i = 0;
-    (function next() {
-      if (i >= jobs.length) { $('run').disabled = false; summary(results); return; }
+    var done = 0;
+
+    function next() {
+      if (i >= jobs.length) {
+        if (++done >= lanes) { $('run').disabled = false; summary(results); }
+        return;
+      }
       var job = jobs[i++];
       var model = job.model;
       var label = model + (job.of > 1 ? ' · прогон ' + job.run + '/' + job.of : '');
@@ -505,7 +524,9 @@ function renderPage(): string {
           buildLog();
         })
         .then(next);
-    })();
+    }
+
+    for (var lane = 0; lane < lanes; lane++) next();
   });
 
   function render(card, model, d, wallMs, entry) {
