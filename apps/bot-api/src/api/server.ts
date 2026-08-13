@@ -16,6 +16,7 @@ import { getActiveSubscription, getPlan } from "../services/subscription.js";
 import { NoFoodError, recognizeFoodText } from "../ai/food.js";
 import { probeProvidersOnce } from "../lib/ai.js";
 import { isAdminTgId, registerAdminRoutes } from "./admin.js";
+import { registerBenchRoutes } from "./bench.js";
 import { downloadTelegramFile } from "../services/tgfiles.js";
 import { checkRecognitionLimit, incrementRecognitionCount } from "../services/limits.js";
 import { localDateStr } from "../utils/tz.js";
@@ -469,6 +470,8 @@ export async function buildServer() {
 
   // приведение типа: инстанс с кастомным pino-логгером совместим по используемым методам
   registerAdminRoutes(app as unknown as Parameters<typeof registerAdminRoutes>[0], authenticate);
+  // Стенд моделей: своя проверка по ключу в ссылке, Telegram и JWT не участвуют
+  registerBenchRoutes(app as unknown as Parameters<typeof registerBenchRoutes>[0]);
 
   app.post("/api/subscription/invoice", { preHandler: authenticate }, async (request, reply) => {
     if (!PAYMENTS_ENABLED) return reply.code(403).send({ error: "payments_disabled" });

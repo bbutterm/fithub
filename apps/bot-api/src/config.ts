@@ -38,6 +38,10 @@ const envSchema = z.object({
   STARS_PRICE_YEAR: z.coerce.number().int().positive().default(1700),
   FREE_PHOTOS_PER_DAY: z.coerce.number().int().positive().default(3),
 
+  // Стенд сравнения vision-моделей (/api/bench?key=…). Пусто — берётся CRON_SECRET;
+  // если пусты оба, стенд выключен и отвечает 404.
+  BENCH_KEY: z.string().optional().default(""),
+
   // Админка: Telegram ID администраторов через запятую
   ADMIN_TG_IDS: z.string().optional().default(""),
   // Учёт расходов: курс и цены токенов (USD за 1M), если провайдер не сообщает стоимость сам

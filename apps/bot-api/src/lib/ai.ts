@@ -33,6 +33,7 @@ export interface CompletionOptions {
 export interface CompletionResult {
   text: string;
   usage: { promptTokens: number; completionTokens: number; cost?: number };
+  costUsd: number; // цена провайдера, если сообщил, иначе расчёт по тарифам из конфига
   latencyMs: number;
   model: string;
 }
@@ -114,9 +115,10 @@ export class AiClient {
         completionTokens: data.usage?.completion_tokens ?? 0,
         cost: data.usage?.cost
       };
-      logger.info({ client: this.name, model, latencyMs, usage }, "ai call");
-      this.recordUsage(model, usage, opts.attribution);
-      return { text: data.choices[0]?.message.content ?? "", usage, latencyMs, model };
+      const costUsd = this.calcCostUsd(usage);
+      logger.info({ client: this.name, model, latencyMs, usage, costUsd }, "ai call");
+      this.recordUsage(model, usage, costUsd, opts.attribution);
+      return { text: data.choices[0]?.message.content ?? "", usage, costUsd, latencyMs, model };
     } finally {
       clearTimeout(timer);
     }
@@ -134,6 +136,7 @@ export class AiClient {
   private recordUsage(
     model: string,
     usage: { promptTokens: number; completionTokens: number; cost?: number },
+    costUsd: number,
     attribution?: { userId?: number; purpose: string }
   ): void {
     void prisma.aiUsage
@@ -145,7 +148,7 @@ export class AiClient {
           purpose: attribution?.purpose ?? "other",
           promptTokens: usage.promptTokens,
           completionTokens: usage.completionTokens,
-          costUsd: this.calcCostUsd(usage)
+          costUsd
         }
       })
       .catch((err) => logger.warn({ err: String(err) }, "ai usage record failed"));
@@ -174,8 +177,9 @@ export class AiClient {
     schema: z.ZodType<T, z.ZodTypeDef, unknown>,
     retryPrompt: string,
     opts: CompletionOptions = {}
-  ): Promise<{ value: T; latencyMs: number }> {
+  ): Promise<{ value: T; latencyMs: number; costUsd: number; model: string; usage: CompletionResult["usage"] }> {
     let lastRaw = "";
+    let costUsd = 0; // накапливаем: повтор при кривом JSON — это второй платный вызов
     for (let attempt = 0; attempt < 2; attempt++) {
       const msgs: ChatMessage[] =
         attempt === 0
@@ -183,9 +187,10 @@ export class AiClient {
           : [...messages, { role: "assistant", content: lastRaw.slice(0, 4000) }, { role: "user", content: retryPrompt }];
       const res = await this.chatCompletion(msgs, opts);
       lastRaw = res.text;
+      costUsd += res.costUsd;
       try {
         const parsed: unknown = JSON.parse(stripJsonFences(res.text));
-        return { value: schema.parse(parsed), latencyMs: res.latencyMs };
+        return { value: schema.parse(parsed), latencyMs: res.latencyMs, costUsd, model: res.model, usage: res.usage };
       } catch (err) {
         logger.warn(
           { client: this.name, attempt, err: String(err), raw: res.text.slice(0, 500) },
