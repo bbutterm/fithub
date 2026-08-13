@@ -27,7 +27,10 @@ const DEFAULT_MODELS = [
   config.VISION_MODEL_FALLBACK,
   "# показали себя лучше",
   "minimax/minimax-m3",
-  "google/gemini-3.6-flash"
+  "google/gemini-3.6-flash",
+  "# дешевле Gemini 3.6, та же семья",
+  config.AUDIO_MODEL, // уже работает в проде на голосовых — имя точно верное
+  "google/gemini-2.5-flash-lite"
 ];
 
 // Один вызов должен уложиться в лимит serverless-функции (60 с) с запасом на сеть
@@ -231,6 +234,9 @@ function renderPage(): string {
   .list { max-height: 260px; overflow: auto; margin-top: 8px; }
   .list div { padding: 6px 0; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 8px; cursor: pointer; }
   .win { border-color: var(--brand); }
+  .rate { padding: 6px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 13px; font-weight: 400; cursor: pointer; }
+  .rate.on { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 16%, transparent); color: var(--brand); font-weight: 600; }
+  details pre { background: var(--bg); border-radius: 8px; padding: 8px; max-height: 220px; overflow: auto; }
 </style>
 </head>
 <body>
@@ -243,6 +249,8 @@ function renderPage(): string {
     <img id="prev" class="prev" style="display:none" alt="" />
     <label class="f" style="margin-top:10px"><span>Подпись (необязательно — как подпись к фото в боте)</span>
       <input type="text" id="caption" placeholder="борщ с хлебом" /></label>
+    <label class="f"><span>Что это было на самом деле — эталон для сравнения (в модели не уходит)</span>
+      <input type="text" id="truth" placeholder="батат запечённый, примерно 250 г" /></label>
     <label class="f"><span>Модели — по одной в строке, строки с # игнорируются</span><textarea id="models"></textarea></label>
     <label class="f"><span>Повторов каждой моделью (разброс между запусками бывает больше, чем между моделями)</span>
       <select id="repeats"><option value="1">1 — быстро</option><option value="2">2</option><option value="3">3 — видно разброс</option></select></label>
@@ -266,6 +274,12 @@ function renderPage(): string {
 
   <div id="out"></div>
   <div id="sum"></div>
+  <div class="card" id="logbox" style="display:none">
+    <b>Лог прогона</b>
+    <p class="hint small" style="margin-top:4px">Машиночитаемый итог со всеми цифрами и вашими оценками. Скопируйте и пришлите в чат — обсудим по нему.</p>
+    <textarea id="log" readonly style="min-height:180px;margin-top:8px"></textarea>
+    <button id="copy" style="margin-top:8px">Скопировать</button>
+  </div>
 </div>
 <script>
 (function () {
@@ -273,6 +287,7 @@ function renderPage(): string {
   var DEFAULTS = ${models};
   var img = null;
   var budget = null; // {spentTodayUsd, limitUsd} — приходит с каждым ответом прогона
+  var log = []; // записи прогонов вместе с оценками — из них собирается лог для чата
 
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
@@ -404,7 +419,10 @@ function renderPage(): string {
     $('run').disabled = true;
     $('out').innerHTML = '';
     $('sum').innerHTML = '';
+    $('log').value = '';
+    $('logbox').style.display = 'none';
     var results = [];
+    log = [];
 
     // Строго по очереди: так видно, кто отвечает быстро, и не бьём провайдера пачкой
     var i = 0;
@@ -413,6 +431,9 @@ function renderPage(): string {
       var job = jobs[i++];
       var model = job.model;
       var label = model + (job.of > 1 ? ' · прогон ' + job.run + '/' + job.of : '');
+      // Запись лога заводим заранее: она наполняется ответом и вашими оценками
+      var entry = { model: model, run: job.run, rate: { dish: null, portion: null, best: false } };
+      log.push(entry);
       var card = document.createElement('div');
       card.className = 'card';
       card.innerHTML = '<div class="head"><span class="mono">' + esc(label) + '</span><span class="badge"><span class="spin"></span> идёт</span></div>';
@@ -426,7 +447,9 @@ function renderPage(): string {
         .then(function (r) { return r.json(); })
         .then(function (d) {
           if (d && d.limitUsd != null) budget = { spent: d.spentTodayUsd, limit: d.limitUsd };
-          render(card, label, d, Date.now() - t0);
+          fillEntry(entry, d);
+          render(card, label, d, Date.now() - t0, entry);
+          buildLog();
           if (d && d.ok) {
             var kcal = ((d.result && d.result.items) || []).reduce(function (s, it) { return s + (+it.kcal || 0); }, 0);
             results.push({
@@ -439,12 +462,17 @@ function renderPage(): string {
             });
           }
         })
-        .catch(function (e) { render(card, label, { ok: false, error: String(e) }, Date.now() - t0); })
+        .catch(function (e) {
+          var failed = { ok: false, error: String(e) };
+          fillEntry(entry, failed);
+          render(card, label, failed, Date.now() - t0, entry);
+          buildLog();
+        })
         .then(next);
     })();
   });
 
-  function render(card, model, d, wallMs) {
+  function render(card, model, d, wallMs, entry) {
     if (!d || !d.ok) {
       card.innerHTML = '<div class="head"><span class="mono">' + esc(model) + '</span><span class="badge err">ошибка</span></div>' +
         '<div class="hint small mono">' + esc((d && d.error) || 'нет ответа') + '</div>';
@@ -493,6 +521,87 @@ function renderPage(): string {
       (r.observed ? '<p class="hint small" style="margin-top:6px">👁 ' + esc(r.observed) + '</p>' : '') +
       '<details style="margin-top:8px"><summary class="hint small">ответ модели целиком</summary>' +
       '<pre class="mono" style="white-space:pre-wrap;margin-top:6px">' + esc(JSON.stringify(r, null, 2)) + '</pre></details>';
+
+    if (entry) rateBar(entry, card);
+  }
+
+  // --- Лог прогона: то, что вы копируете и присылаете в чат ---
+  function fillEntry(e, d) {
+    if (!d || !d.ok) { e.ok = false; e.error = ((d && d.error) || 'нет ответа').slice(0, 200); return; }
+    var r = d.result || {};
+    var items = r.items || [];
+    e.ok = true;
+    e.dishes = items.map(function (it) { return it.dish; }).join('; ');
+    e.grams = Math.round(items.reduce(function (s, it) { return s + (+it.grams || 0); }, 0));
+    e.kcal = Math.round(items.reduce(function (s, it) { return s + (+it.kcal || 0); }, 0));
+    e.conf = r.overall_confidence != null ? Number(r.overall_confidence) : null;
+    e.usd = Number(Number(d.costUsd).toFixed(5));
+    e.sec = Number((d.latencyMs / 1000).toFixed(1));
+  }
+
+  function buildLog() {
+    var data = {
+      подпись: $('caption').value || null,
+      эталон: $('truth').value || null,
+      повторов: Number($('repeats').value) || 1,
+      прогоны: log.map(function (e) {
+        return e.ok === false
+          ? { модель: e.model, прогон: e.run, ошибка: e.error }
+          : {
+              модель: e.model, прогон: e.run, блюда: e.dishes, граммы: e.grams, ккал: e.kcal,
+              уверенность: e.conf, цена_usd: e.usd, секунд: e.sec,
+              оценка: { блюдо: e.rate.dish, порция: e.rate.portion, лучшая: e.rate.best }
+            };
+      })
+    };
+    $('log').value = JSON.stringify(data, null, 1);
+    $('logbox').style.display = 'block';
+  }
+
+  $('copy').addEventListener('click', function () {
+    var ta = $('log');
+    ta.select();
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(ta.value).then(function () { $('copy').textContent = 'Скопировано ✓'; })
+        .catch(function () { document.execCommand('copy'); $('copy').textContent = 'Скопировано ✓'; });
+    } else {
+      document.execCommand('copy');
+      $('copy').textContent = 'Скопировано ✓';
+    }
+    setTimeout(function () { $('copy').textContent = 'Скопировать'; }, 2000);
+  });
+
+  // Панель оценки под карточкой: блюдо, порция, «лучшая». Всё попадает в лог.
+  function rateBar(entry, card) {
+    var box = document.createElement('div');
+    box.className = 'row';
+    box.style.cssText = 'margin-top:10px;gap:6px;flex-wrap:wrap';
+    box.innerHTML =
+      '<span class="hint small">блюдо:</span>' +
+      '<button class="rate" data-k="dish" data-v="верно">верно</button>' +
+      '<button class="rate" data-k="dish" data-v="мимо">мимо</button>' +
+      '<span class="hint small">порция:</span>' +
+      '<button class="rate" data-k="portion" data-v="занижена">мало</button>' +
+      '<button class="rate" data-k="portion" data-v="точно">точно</button>' +
+      '<button class="rate" data-k="portion" data-v="завышена">много</button>' +
+      '<button class="rate" data-k="best" data-v="1">⭐ лучшая</button>';
+    Array.prototype.forEach.call(box.querySelectorAll('button'), function (btn) {
+      btn.addEventListener('click', function () {
+        var k = btn.getAttribute('k') || btn.getAttribute('data-k');
+        var v = btn.getAttribute('data-v');
+        if (k === 'best') {
+          entry.rate.best = !entry.rate.best;
+          btn.classList.toggle('on', entry.rate.best);
+        } else {
+          entry.rate[k === 'dish' ? 'dish' : 'portion'] = v;
+          Array.prototype.forEach.call(box.querySelectorAll('button[data-k="' + k + '"]'), function (o) {
+            o.classList.toggle('on', o === btn);
+          });
+        }
+        buildLog();
+      });
+    });
+    card.appendChild(box);
   }
 
   function budgetLine() {
