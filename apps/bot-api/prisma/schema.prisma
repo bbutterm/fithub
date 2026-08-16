@@ -189,20 +189,3 @@ model UsageCounter {
 
   @@id([userId, date])
 }
-
-// Служебные таблицы рантайма. Раньше создавались лениво (CREATE TABLE IF NOT EXISTS)
-// прямо из кода — роль приложения без CREATE на схеме получала permission denied.
-// Живут в схеме и миграциях; имена, типы и умолчания совпадают с прежним DDL.
-
-/// Блокировка «1 распознавание на пользователя» между serverless-инстансами.
-/// Связи с User нет намеренно: строки эфемерные, снимаются по TTL (см. services/locks.ts).
-model RecognitionLock {
-  userId   Int      @id
-  lockedAt DateTime @default(now()) @db.Timestamptz(6)
-}
-
-/// Дедупликация Telegram-вебхуков по update_id (см. services/updates.ts).
-model ProcessedUpdate {
-  updateId  BigInt   @id
-  createdAt DateTime @default(now()) @db.Timestamptz(6)
-}

@@ -5,7 +5,6 @@ import type { Update } from "grammy/types";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import { config } from "../config.js";
-import { PAYMENTS_ENABLED } from "../features.js";
 import { logger } from "../logger.js";
 import { validateInitData } from "../auth/initData.js";
 import { upsertUserFromTelegram } from "../services/users.js";
@@ -16,10 +15,8 @@ import { getActiveSubscription, getPlan } from "../services/subscription.js";
 import { NoFoodError, recognizeFoodText } from "../ai/food.js";
 import { probeProvidersOnce } from "../lib/ai.js";
 import { isAdminTgId, registerAdminRoutes } from "./admin.js";
-import { registerMigrationExportRoutes } from "./migrationExport.js";
 import { downloadTelegramFile } from "../services/tgfiles.js";
 import { checkRecognitionLimit, incrementRecognitionCount } from "../services/limits.js";
-import { isDuplicateUpdate } from "../services/updates.js";
 import { localDateStr } from "../utils/tz.js";
 import { PLAN_PAYLOADS } from "../bot/payments.js";
 import { bot } from "../bot/bot.js";
@@ -95,6 +92,25 @@ function getWaitUntil(): ((p: Promise<unknown>) => void) | undefined {
   const store = (globalThis as unknown as Record<symbol, { get?: () => { waitUntil?: (p: Promise<unknown>) => void } } | undefined>)[sym];
   const waitUntil = store?.get?.()?.waitUntil;
   return typeof waitUntil === "function" ? waitUntil : undefined;
+}
+
+// Межинстансовая дедупликация update_id через БД (таблица создаётся сама, миграция не нужна)
+let dedupeTableReady = false;
+async function isDuplicateUpdate(updateId: number): Promise<boolean> {
+  try {
+    if (!dedupeTableReady) {
+      await prisma.$executeRawUnsafe(
+        `CREATE TABLE IF NOT EXISTS "ProcessedUpdate" ("updateId" BIGINT PRIMARY KEY, "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now())`
+      );
+      await prisma.$executeRawUnsafe(`DELETE FROM "ProcessedUpdate" WHERE "createdAt" < now() - interval '2 days'`);
+      dedupeTableReady = true;
+    }
+    const inserted = await prisma.$executeRaw`INSERT INTO "ProcessedUpdate" ("updateId") VALUES (${updateId}) ON CONFLICT DO NOTHING`;
+    return inserted === 0;
+  } catch (err) {
+    logger.warn({ err: String(err) }, "update dedupe failed, processing anyway");
+    return false;
+  }
 }
 
 export async function buildServer() {
@@ -444,20 +460,15 @@ export async function buildServer() {
       plan,
       expiresAt: sub?.expiresAt.toISOString() ?? null,
       prices: { month: config.STARS_PRICE_MONTH, year: config.STARS_PRICE_YEAR },
-      freeLimit: user.dailyLimitOverride ?? config.FREE_PHOTOS_PER_DAY,
-      usedToday: usage?.photoCount ?? 0,
-      paymentsEnabled: PAYMENTS_ENABLED
+      freeLimit: config.FREE_PHOTOS_PER_DAY,
+      usedToday: usage?.photoCount ?? 0
     };
   });
 
   // приведение типа: инстанс с кастомным pino-логгером совместим по используемым методам
   registerAdminRoutes(app as unknown as Parameters<typeof registerAdminRoutes>[0], authenticate);
 
-  // Временный мост разового переноса БД: молчит, пока не задан MIGRATION_SECRET
-  registerMigrationExportRoutes(app as unknown as Parameters<typeof registerMigrationExportRoutes>[0]);
-
   app.post("/api/subscription/invoice", { preHandler: authenticate }, async (request, reply) => {
-    if (!PAYMENTS_ENABLED) return reply.code(403).send({ error: "payments_disabled" });
     const body = z.object({ plan: z.enum(["month", "year"]) }).safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
     const p = PLAN_PAYLOADS[body.data.plan];

@@ -110,5 +110,4 @@ export interface SubscriptionResponse {
   prices: { month: number; year: number };
   freeLimit: number;
   usedToday: number;
-  paymentsEnabled: boolean; // false — приём оплаты отключён (PAYMENTS_ENABLED на бэкенде)
 }

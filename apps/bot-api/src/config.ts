@@ -12,8 +12,6 @@ const envSchema = z.object({
   JWT_SECRET: z.string().optional(),
   BOT_WEBHOOK_URL: z.string().url().optional().or(z.literal("")),
   CRON_SECRET: z.string().optional().default(""),
-  // Temporary Preview-only secret for the one-off database migration bridge.
-  MIGRATION_SECRET: z.string().optional().default(""),
 
   S3_ENDPOINT: z.string().optional().default(""),
   S3_ACCESS_KEY: z.string().optional().default(""),
@@ -35,7 +33,6 @@ const envSchema = z.object({
   TEXT_API_KEY: z.string().min(5, "TEXT_API_KEY обязателен — ключ text-провайдера, https://platform.deepseek.com/api_keys"),
   TEXT_MODEL: z.string().default("deepseek-chat"),
 
-  // Приём оплаты включается/выключается в коде — см. src/features.ts (PAYMENTS_ENABLED)
   STARS_PRICE_MONTH: z.coerce.number().int().positive().default(250),
   STARS_PRICE_YEAR: z.coerce.number().int().positive().default(1700),
   FREE_PHOTOS_PER_DAY: z.coerce.number().int().positive().default(3),
