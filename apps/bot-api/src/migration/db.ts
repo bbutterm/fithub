@@ -14,13 +14,13 @@ import type { ConvertedRow } from "./values.js";
 /** Чтение состояния целевой базы. */
 export type ImportReader = {
   countCoreTable: (table: CoreTable) => Promise<number>;
-  /** null — таблицы ProcessedUpdate в базе нет (создаётся лениво) */
+  /** null — таблицы ProcessedUpdate в базе нет (в свежей базе её создаёт миграция) */
   countProcessedUpdate: () => Promise<number | null>;
 };
 
 /** Запись внутри одной транзакции. */
 export type ImportWriter = ImportReader & {
-  /** CREATE TABLE IF NOT EXISTS — тот же DDL, что и в webhook-дедупликации */
+  /** Страховка для баз без миграции: идемпотентный DDL той же формы, что и в миграции */
   ensureProcessedUpdateTable: () => Promise<void>;
   /** Вставка пачки строк с явными id; возвращает число записанных строк */
   insertRows: (table: ImportableTable, rows: readonly ConvertedRow[]) => Promise<number>;

@@ -2,8 +2,8 @@
  * Описание таблиц ядра FitHub для разового импорта cloud-выгрузки.
  *
  * Единственный источник правды об именах таблиц, колонок и их типах — этот файл;
- * он собран вручную по apps/bot-api/prisma/schema.prisma и по DDL ленивой таблицы
- * "ProcessedUpdate" (apps/bot-api/src/api/server.ts).
+ * он собран вручную по apps/bot-api/prisma/schema.prisma (включая служебную
+ * "ProcessedUpdate": BIGINT PK + TIMESTAMPTZ).
  *
  * ВАЖНО про соседний продукт: в той же базе живут таблицы B Plus, они пишутся
  * строчными буквами. Здесь перечислены только таблицы FitHub в кавычках и с
@@ -67,7 +67,10 @@ export const CORE_TABLES = [
 
 export type CoreTable = (typeof CORE_TABLES)[number];
 
-/** Вне Prisma: таблица дедупликации webhook-апдейтов, создаётся лениво. */
+/**
+ * Таблица дедупликации webhook-апдейтов. Модель Prisma у неё есть, но импортёр пишет в
+ * неё сырым SQL (своих id-sequence нет, состав колонок фиксирован) — поэтому отдельно от CORE_TABLES.
+ */
 export const PROCESSED_UPDATE_TABLE = "ProcessedUpdate";
 
 /** Полный список таблиц, которые импортёр вообще может назвать в SQL. */
@@ -228,7 +231,7 @@ export const CORE_TABLE_SPECS: Record<CoreTable, TableSpec> = {
   }
 };
 
-/** ProcessedUpdate вне Prisma: BIGINT PRIMARY KEY + TIMESTAMPTZ, без sequence. */
+/** ProcessedUpdate: BIGINT PRIMARY KEY + TIMESTAMPTZ, без sequence. */
 export const PROCESSED_UPDATE_SPEC: TableSpec = {
   pk: ["updateId"],
   columns: [

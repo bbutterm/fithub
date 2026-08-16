@@ -131,7 +131,8 @@ export function writerFor(tx: Tx): ImportWriter {
     countCoreTable: (table) => countCoreTable(tx, table),
     countProcessedUpdate: () => countProcessedUpdate(tx),
     ensureProcessedUpdateTable: async () => {
-      // тот же DDL, что создаёт таблицу в рантайме webhook-дедупликации
+      // Разовый CLI под привилегированной ролью: та же форма таблицы, что в миграции
+      // 20260816120000_runtime_service_tables. Продуктовый рантайм DDL не выполняет.
       await tx.$executeRawUnsafe(
         `CREATE TABLE IF NOT EXISTS "ProcessedUpdate" ("updateId" BIGINT PRIMARY KEY, "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now())`
       );
