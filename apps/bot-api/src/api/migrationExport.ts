@@ -45,6 +45,29 @@ export const migrationQuerySchema = z
 
 export type MigrationQuery = z.infer<typeof migrationQuerySchema>;
 
+/** Параметры, которые эндпоинт вообще признаёт. Всё остальное в схему не попадает. */
+const MIGRATION_QUERY_KEYS = ["mode", "table", "cursor", "limit"] as const;
+
+/**
+ * Оставляет из query только свои параметры.
+ *
+ * Vercel Protection (и прокси вообще) дописывают к защищённому запросу служебные
+ * ключи транспорта — со .strict() они валили валидный запрос в 400. Неизвестные
+ * ключи здесь отбрасываются целиком: дальше — ни в схему, ни в лог, ни в SQL,
+ * ни в ответ — они не проходят. Значения не трогаем: их по-прежнему проверяет
+ * прежняя строгая схема, поэтому `table=User;--` и битый cursor остаются 400.
+ */
+export function pickMigrationQuery(query: unknown): Record<string, unknown> {
+  if (query === null || typeof query !== "object") return {};
+  const source = query as Record<string, unknown>;
+  const picked: Record<string, unknown> = {};
+  for (const key of MIGRATION_QUERY_KEYS) {
+    // hasOwnProperty: ключи из прототипа — не параметры запроса
+    if (Object.prototype.hasOwnProperty.call(source, key)) picked[key] = source[key];
+  }
+  return picked;
+}
+
 /** Сравнение секретов за постоянное время: хэши уравнивают длину, длина секрета не утекает. */
 export function constantTimeEqual(a: string, b: string): boolean {
   const ha = createHash("sha256").update(a, "utf8").digest();
@@ -292,7 +315,7 @@ export function registerMigrationExportRoutes(
       return reply.code(404).send({ error: "not_found" });
     }
 
-    const parsed = migrationQuerySchema.safeParse(request.query);
+    const parsed = migrationQuerySchema.safeParse(pickMigrationQuery(request.query));
     if (!parsed.success) return reply.code(400).send({ error: "bad_request" });
     const q = parsed.data;
 

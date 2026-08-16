@@ -12,6 +12,7 @@ import {
   parseBigIntCursor,
   parseIntCursor,
   parseUsageCursor,
+  pickMigrationQuery,
   registerMigrationExportRoutes,
   serializeExportRow,
   serializeExportValue
@@ -111,6 +112,43 @@ describe("migration bridge: валидация запроса", () => {
   it("посторонние параметры отклоняются", () => {
     expect(migrationQuerySchema.safeParse({ where: "1=1" }).success).toBe(false);
     expect(migrationQuerySchema.safeParse({ cursor: "x".repeat(129) }).success).toBe(false);
+  });
+
+  it("до схемы доходят только свои четыре параметра", () => {
+    expect(
+      pickMigrationQuery({
+        mode: "export",
+        table: "Meal",
+        cursor: "9",
+        limit: "2",
+        // служебное от Vercel Protection и прочего транспорта
+        "x-vercel-protection-bypass": "tok",
+        _vercel_share: "abc",
+        where: "1=1"
+      })
+    ).toEqual({ mode: "export", table: "Meal", cursor: "9", limit: "2" });
+  });
+
+  it("отсутствующие параметры не подставляются как undefined — работают дефолты", () => {
+    expect(pickMigrationQuery({ foo: "bar" })).toEqual({});
+    expect(migrationQuerySchema.parse(pickMigrationQuery({ foo: "bar" })).mode).toBe("counts");
+  });
+
+  it("не тянет ключи прототипа и переживает не-объект", () => {
+    expect(pickMigrationQuery(Object.create({ table: "Meal" }))).toEqual({});
+    expect(pickMigrationQuery(undefined)).toEqual({});
+    expect(pickMigrationQuery(null)).toEqual({});
+    expect(pickMigrationQuery("mode=counts")).toEqual({});
+  });
+
+  it("значения своих параметров не смягчаются — их по-прежнему судит строгая схема", () => {
+    expect(migrationQuerySchema.safeParse(pickMigrationQuery({ mode: "export", table: "User;--" })).success).toBe(
+      false
+    );
+    expect(
+      migrationQuerySchema.safeParse(pickMigrationQuery({ mode: "export", table: "Meal", cursor: "x".repeat(129) }))
+        .success
+    ).toBe(false);
   });
 
   it("курсоры принимают только ключи ожидаемой формы", () => {
@@ -218,6 +256,88 @@ describe("migration bridge: роут", () => {
       rows: [{ id: 10 }, { id: 11 }]
     });
     expect(seen).toEqual([["Meal", "9", 2]]);
+    await app.close();
+  });
+
+  // Реальный protected Vercel Preview: прокси дописывает к запросу свои query-ключи,
+  // из-за .strict() валидный запрос падал в 400 ещё до обращения к данным.
+  it("служебные query-параметры транспорта игнорируются", async () => {
+    const seen: Array<[string, string | undefined, number]> = [];
+    const deps = fakeDeps({
+      fetchPage: async (table, cursor, limit) => {
+        seen.push([table, cursor, limit]);
+        return { rows: [{ id: 10 }], nextCursor: null, available: true };
+      }
+    });
+    const app = await buildTestApp(SECRET, deps);
+    const auth = { authorization: `Bearer ${SECRET}` };
+
+    // защищённый preview без единого нашего параметра — дефолтный mode=counts
+    const bare = await app.inject({
+      method: "GET",
+      url: `${PATH}?x-vercel-protection-bypass=tok&_vercel_share=abc`,
+      headers: auth
+    });
+    expect(bare.statusCode).toBe(200);
+    expect(bare.json()).toEqual({
+      mode: "counts",
+      tables: { User: 2, Meal: 5, ProcessedUpdate: null },
+      limits: { defaultLimit: DEFAULT_LIMIT, maxLimit: MAX_LIMIT }
+    });
+
+    const exported = await app.inject({
+      method: "GET",
+      url: `${PATH}?mode=export&table=Meal&cursor=9&limit=2&x-vercel-protection-bypass=tok&where=1%3D1`,
+      headers: auth
+    });
+    expect(exported.statusCode).toBe(200);
+    // чужие ключи не доехали ни до слоя данных, ни до ответа
+    expect(seen).toEqual([["Meal", "9", 2]]);
+    expect(JSON.stringify(exported.json())).not.toContain("vercel");
+    expect(JSON.stringify(exported.json())).not.toContain("1=1");
+    await app.close();
+  });
+
+  it("значения своих параметров всё так же проверяются, посторонние их не прикрывают", async () => {
+    const deps = fakeDeps();
+    const spy = vi.spyOn(deps, "fetchPage");
+    const app = await buildTestApp(SECRET, deps);
+    const auth = { authorization: `Bearer ${SECRET}` };
+
+    const sqlTable = await app.inject({
+      method: "GET",
+      url: `${PATH}?mode=export&table=Meal%3B%20DROP%20TABLE%20%22User%22&x-vercel-protection-bypass=tok`,
+      headers: auth
+    });
+    expect(sqlTable.statusCode).toBe(400);
+    expect(sqlTable.json()).toEqual({ error: "bad_request" });
+
+    const sqlCursor = await app.inject({
+      method: "GET",
+      url: `${PATH}?mode=export&table=Meal&cursor=${"x".repeat(129)}&_vercel_share=abc`,
+      headers: auth
+    });
+    expect(sqlCursor.statusCode).toBe(400);
+
+    const overLimit = await app.inject({
+      method: "GET",
+      url: `${PATH}?mode=export&table=Meal&limit=${MAX_LIMIT + 1}&_vercel_share=abc`,
+      headers: auth
+    });
+    expect(overLimit.statusCode).toBe(400);
+
+    expect(spy).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("посторонние параметры не открывают эндпоинт без токена", async () => {
+    const deps = fakeDeps();
+    const spy = vi.spyOn(deps, "collectCounts");
+    const app = await buildTestApp(SECRET, deps);
+    const res = await app.inject({ method: "GET", url: `${PATH}?x-vercel-protection-bypass=tok` });
+    expect(res.statusCode).toBe(404);
+    expect(res.headers["cache-control"]).toBe("private, no-store");
+    expect(spy).not.toHaveBeenCalled();
     await app.close();
   });
 

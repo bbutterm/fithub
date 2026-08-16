@@ -8,3 +8,4 @@ coverage/
 *.tsbuildinfo
 .pnpm-store/
 apps/webapp/dist/
+.vercel
