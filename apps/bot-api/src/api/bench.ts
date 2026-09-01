@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { config } from "../config.js";
-import { prisma } from "../db.js";
+import { enableRls, prisma } from "../db.js";
 import { logger } from "../logger.js";
 import { BENCH_DAILY_USD_LIMIT } from "../features.js";
 import { visionClient, type ChatMessage } from "../lib/ai.js";
@@ -51,6 +51,7 @@ async function ensureBenchImageTable(): Promise<void> {
   await prisma.$executeRawUnsafe(
     `CREATE TABLE IF NOT EXISTS "BenchImage" ("id" TEXT PRIMARY KEY, "dataUrl" TEXT NOT NULL, "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now())`
   );
+  await enableRls("BenchImage");
   // Прогон идёт сразу после загрузки, так что двух часов хватает с запасом
   await prisma.$executeRawUnsafe(`DELETE FROM "BenchImage" WHERE "createdAt" < now() - interval '2 hours'`);
   benchImageTableReady = true;

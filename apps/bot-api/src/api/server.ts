@@ -3,7 +3,7 @@ import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import type { Update } from "grammy/types";
 import { z } from "zod";
-import { prisma } from "../db.js";
+import { enableRls, prisma } from "../db.js";
 import { config } from "../config.js";
 import { PAYMENTS_ENABLED } from "../features.js";
 import { logger } from "../logger.js";
@@ -104,6 +104,7 @@ async function isDuplicateUpdate(updateId: number): Promise<boolean> {
       await prisma.$executeRawUnsafe(
         `CREATE TABLE IF NOT EXISTS "ProcessedUpdate" ("updateId" BIGINT PRIMARY KEY, "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now())`
       );
+      await enableRls("ProcessedUpdate");
       await prisma.$executeRawUnsafe(`DELETE FROM "ProcessedUpdate" WHERE "createdAt" < now() - interval '2 days'`);
       dedupeTableReady = true;
     }
