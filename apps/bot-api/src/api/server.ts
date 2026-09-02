@@ -5,7 +5,6 @@ import type { Update } from "grammy/types";
 import { z } from "zod";
 import { enableRls, prisma } from "../db.js";
 import { config } from "../config.js";
-import { PAYMENTS_ENABLED } from "../features.js";
 import { logger } from "../logger.js";
 import { validateInitData } from "../auth/initData.js";
 import { upsertUserFromTelegram } from "../services/users.js";
@@ -463,9 +462,8 @@ export async function buildServer() {
       plan,
       expiresAt: sub?.expiresAt.toISOString() ?? null,
       prices: { month: config.STARS_PRICE_MONTH, year: config.STARS_PRICE_YEAR },
-      freeLimit: user.dailyLimitOverride ?? config.FREE_PHOTOS_PER_DAY,
-      usedToday: usage?.photoCount ?? 0,
-      paymentsEnabled: PAYMENTS_ENABLED
+      freeLimit: config.FREE_PHOTOS_PER_DAY,
+      usedToday: usage?.photoCount ?? 0
     };
   });
 
@@ -475,7 +473,6 @@ export async function buildServer() {
   registerBenchRoutes(app as unknown as Parameters<typeof registerBenchRoutes>[0]);
 
   app.post("/api/subscription/invoice", { preHandler: authenticate }, async (request, reply) => {
-    if (!PAYMENTS_ENABLED) return reply.code(403).send({ error: "payments_disabled" });
     const body = z.object({ plan: z.enum(["month", "year"]) }).safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
     const p = PLAN_PAYLOADS[body.data.plan];

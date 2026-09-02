@@ -19,9 +19,18 @@ import { upsertUserFromTelegram } from "../services/users.js";
 import { addDays, localDateStr, zonedTimeToUtc } from "../utils/tz.js";
 import { formatDaySummary, formatMealCard } from "./cards.js";
 import { checkRateLimit } from "./queue.js";
-import { limitReachedText, paywallKeyboard, registerPaymentHandlers } from "./payments.js";
+import { paywallKeyboard, registerPaymentHandlers } from "./payments.js";
 
 export const bot = new Bot(config.BOT_TOKEN);
+
+/** Текст при исчерпанном дневном лимите. Один на фото и на голосовые. */
+function limitReachedText(limit: number): string {
+  return [
+    `На бесплатном тарифе — ${limit} распознавания в день, и на сегодня они закончились 😌`,
+    "",
+    "С <b>Pro</b> распознавания безлимитные, советы приходят каждый день, а аналитика открыта за месяц."
+  ].join("\n");
+}
 
 class RecognitionTimeoutError extends Error {
   constructor() {
@@ -453,7 +462,7 @@ async function handleContextualText(
         await ctx.api.editMessageText(
           ctx.chat.id,
           status.message_id,
-          limitReachedText(limit.limit ?? config.FREE_PHOTOS_PER_DAY, true),
+          `На бесплатном тарифе — ${limit.limit} распознавания в день, и на сегодня они закончились 😌 С Pro — безлимит.`,
           { reply_markup: paywallKeyboard() }
         );
         return;
