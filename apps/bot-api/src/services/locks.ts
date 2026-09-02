@@ -1,7 +1,7 @@
 // Блокировка «1 распознавание на пользователя» через Postgres —
 // работает между всеми serverless-инстансами (in-memory Set — нет).
 // Таблица создаётся лениво, миграция не нужна.
-import { prisma } from "../db.js";
+import { enableRls, prisma } from "../db.js";
 import { logger } from "../logger.js";
 
 let tableReady = false;
@@ -10,6 +10,7 @@ async function ensureTable(): Promise<void> {
   await prisma.$executeRawUnsafe(
     `CREATE TABLE IF NOT EXISTS "RecognitionLock" ("userId" INTEGER PRIMARY KEY, "lockedAt" TIMESTAMPTZ NOT NULL DEFAULT now())`
   );
+  await enableRls("RecognitionLock");
   tableReady = true;
 }
 

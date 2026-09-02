@@ -66,6 +66,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     process.exit(1);
   }
   const c = parsed.data;
+  // Пустой CRON_SECRET = крон-эндпоинты открыты всему интернету: любой желающий
+  // запускает рассылку советов и месячные отчёты за ваш счёт
+  if (!c.CRON_SECRET) {
+    console.warn(
+      `\n⚠️  CRON_SECRET не задан — /api/cron/* принимает запросы без проверки.\n` +
+        `   Задайте любую случайную строку в переменных окружения: Vercel подставит её\n` +
+        `   в заголовок Authorization при вызове крона автоматически.\n`
+    );
+  }
+  // Одна и та же модель по обе стороны каскада — самая незаметная утечка денег:
+  // при низкой уверенности бот переспрашивает ту же модель и платит дважды за тот же ответ
+  if (c.VISION_MODEL === c.VISION_MODEL_FALLBACK && c.VISION_FALLBACK_THRESHOLD > 0) {
+    console.warn(
+      `\n⚠️  VISION_MODEL и VISION_MODEL_FALLBACK совпадают (${c.VISION_MODEL}).\n` +
+        `   Перепроверка при уверенности ниже ${c.VISION_FALLBACK_THRESHOLD} переспросит ту же модель и удвоит счёт.\n` +
+        `   Укажите в VISION_MODEL_FALLBACK другую модель — или VISION_FALLBACK_THRESHOLD=0, чтобы отключить перепроверку.\n`
+    );
+  }
   return {
     ...c,
     BOT_WEBHOOK_URL: c.BOT_WEBHOOK_URL || undefined,

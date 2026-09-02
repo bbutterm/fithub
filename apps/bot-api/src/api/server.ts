@@ -3,7 +3,7 @@ import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import type { Update } from "grammy/types";
 import { z } from "zod";
-import { prisma } from "../db.js";
+import { enableRls, prisma } from "../db.js";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { validateInitData } from "../auth/initData.js";
@@ -15,6 +15,7 @@ import { getActiveSubscription, getPlan } from "../services/subscription.js";
 import { NoFoodError, recognizeFoodText } from "../ai/food.js";
 import { probeProvidersOnce } from "../lib/ai.js";
 import { isAdminTgId, registerAdminRoutes } from "./admin.js";
+import { registerBenchRoutes } from "./bench.js";
 import { downloadTelegramFile } from "../services/tgfiles.js";
 import { checkRecognitionLimit, incrementRecognitionCount } from "../services/limits.js";
 import { localDateStr } from "../utils/tz.js";
@@ -102,6 +103,7 @@ async function isDuplicateUpdate(updateId: number): Promise<boolean> {
       await prisma.$executeRawUnsafe(
         `CREATE TABLE IF NOT EXISTS "ProcessedUpdate" ("updateId" BIGINT PRIMARY KEY, "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now())`
       );
+      await enableRls("ProcessedUpdate");
       await prisma.$executeRawUnsafe(`DELETE FROM "ProcessedUpdate" WHERE "createdAt" < now() - interval '2 days'`);
       dedupeTableReady = true;
     }
@@ -467,6 +469,8 @@ export async function buildServer() {
 
   // приведение типа: инстанс с кастомным pino-логгером совместим по используемым методам
   registerAdminRoutes(app as unknown as Parameters<typeof registerAdminRoutes>[0], authenticate);
+  // Стенд моделей: своя проверка по ключу в ссылке, Telegram и JWT не участвуют
+  registerBenchRoutes(app as unknown as Parameters<typeof registerBenchRoutes>[0]);
 
   app.post("/api/subscription/invoice", { preHandler: authenticate }, async (request, reply) => {
     const body = z.object({ plan: z.enum(["month", "year"]) }).safeParse(request.body);

@@ -21,7 +21,7 @@ const foodItemSchema = z.object({
   confidence: z.coerce.number().min(0).max(1).default(0.7)
 });
 
-const foodResponseSchema = z.object({
+export const foodResponseSchema = z.object({
   observed: z.string().optional(), // «рассуждение» модели: что видно на фото — улучшает точность
   items: z.array(foodItemSchema).default([]),
   total: z

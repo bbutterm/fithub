@@ -1,3 +1,4 @@
+import type { Profile, User } from "@prisma/client";
 import { prisma } from "../db.js";
 import { logger } from "../logger.js";
 import { bot } from "../bot/bot.js";
@@ -6,6 +7,7 @@ import { buildMonthlyReportPrompt } from "../prompts/advice.js";
 import { formatProfileBlock, getDailyStats, type DayStat } from "../services/stats.js";
 import { getPlan } from "../services/subscription.js";
 import { localDateStr } from "../utils/tz.js";
+import { chunk, shouldSendMonthly } from "./schedule.js";
 
 function prevMonthRange(todayLocal: string): { monthKey: string; start: string; end: string; days: number; label: string } {
   const [y, m] = todayLocal.split("-").map(Number) as [number, number, ...number[]];
@@ -55,52 +57,72 @@ function buildMonthStatsBlock(stats: DayStat[], targetKcal: number | null): stri
   return lines.filter(Boolean).join("\n");
 }
 
-/** Запускается ежечасно: 1-го числа месяца (по локальному времени, после 10:00) шлёт Pro-пользователям отчёт за прошлый месяц. */
+// Один вызов ИИ занимает секунды, а serverless-функцию убивают на 60-й — поэтому
+// пользователи обрабатываются пачками параллельно и с запасом по времени.
+// Недошедшие получат отчёт на следующем тике: дубли исключает уникальный ключ DailyAdvice.
+const CONCURRENCY = 5;
+const TICK_BUDGET_MS = 45_000;
+
+/** Отчёт одному пользователю. Бросает исключение — вызывающий логирует и идёт дальше. */
+async function sendMonthlyReport(profile: Profile & { user: User }, now: Date): Promise<void> {
+  const { user } = profile;
+  const today = localDateStr(user.tz, now);
+  const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: user.tz, hour: "2-digit", hour12: false }).format(now));
+  if (!shouldSendMonthly(today, hour)) return;
+  if ((await getPlan(user.id)) !== "pro") return;
+
+  const range = prevMonthRange(today);
+  const exists = await prisma.dailyAdvice.findUnique({
+    where: { userId_date_kind: { userId: user.id, date: range.monthKey, kind: "monthly" } }
+  });
+  if (exists) return;
+
+  const stats = await getDailyStats(user.id, user.tz, range.days, range.end);
+  if (stats.every((s) => s.mealsCount === 0)) return;
+
+  const prompt = buildMonthlyReportPrompt({
+    tone: profile.adviceTone,
+    profileBlock: formatProfileBlock(profile),
+    statsBlock: buildMonthStatsBlock(stats, profile.targetKcal),
+    monthLabel: range.label
+  });
+  // Ошибка провайдера ловится вызывающим — отчёт уйдёт на следующем тике.
+  const res = await textClient.chatCompletion(
+    [
+      { role: "system", content: prompt.system },
+      { role: "user", content: prompt.user }
+    ],
+    { attribution: { userId: user.id, purpose: "monthly" } }
+  );
+  const text = res.text.trim();
+  if (!text) return;
+
+  await prisma.dailyAdvice.create({
+    data: { userId: user.id, date: range.monthKey, kind: "monthly", adviceText: text, statsJson: JSON.parse(JSON.stringify(stats)) }
+  });
+  await bot.api.sendMessage(Number(user.tgUserId), `📈 Отчёт за ${range.label}\n\n${text}`);
+  logger.info({ userId: user.id, month: range.monthKey }, "monthly report sent");
+}
+
+/** Запускается по расписанию: в первые дни месяца шлёт Pro-пользователям отчёт за прошлый месяц. */
 export async function runMonthlyReportTick(now: Date = new Date()): Promise<void> {
   const profiles = await prisma.profile.findMany({ include: { user: true } });
-  for (const profile of profiles) {
-    const { user } = profile;
-    try {
-      const today = localDateStr(user.tz, now);
-      if (!today.endsWith("-01")) continue;
-      const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: user.tz, hour: "2-digit", hour12: false }).format(now));
-      if (hour < 10) continue;
-      if ((await getPlan(user.id)) !== "pro") continue;
+  const deadline = Date.now() + TICK_BUDGET_MS;
+  let processed = 0;
 
-      const range = prevMonthRange(today);
-      const exists = await prisma.dailyAdvice.findUnique({
-        where: { userId_date_kind: { userId: user.id, date: range.monthKey, kind: "monthly" } }
-      });
-      if (exists) continue;
-
-      const stats = await getDailyStats(user.id, user.tz, range.days, range.end);
-      if (stats.every((s) => s.mealsCount === 0)) continue;
-
-      const prompt = buildMonthlyReportPrompt({
-        tone: profile.adviceTone,
-        profileBlock: formatProfileBlock(profile),
-        statsBlock: buildMonthStatsBlock(stats, profile.targetKcal),
-        monthLabel: range.label
-      });
-      // Ошибка провайдера ловится ниже — отчёт уйдёт на следующем ежечасном тике.
-      const res = await textClient.chatCompletion(
-        [
-          { role: "system", content: prompt.system },
-          { role: "user", content: prompt.user }
-        ],
-        { attribution: { userId: user.id, purpose: "monthly" } }
-      );
-      const text = res.text.trim();
-      if (!text) continue;
-
-      await prisma.dailyAdvice.create({
-        data: { userId: user.id, date: range.monthKey, kind: "monthly", adviceText: text, statsJson: JSON.parse(JSON.stringify(stats)) }
-      });
-      await bot.api.sendMessage(Number(user.tgUserId), `📈 Отчёт за ${range.label}\n\n${text}`);
-      logger.info({ userId: user.id, month: range.monthKey }, "monthly report sent");
-    } catch (err) {
-      logger.error({ err: String(err), userId: user.id }, "monthly report failed");
+  for (const batch of chunk(profiles, CONCURRENCY)) {
+    if (Date.now() > deadline) {
+      logger.warn({ processed, total: profiles.length }, "monthly tick out of time, rest continues next tick");
+      break;
     }
+    await Promise.all(
+      batch.map((profile) =>
+        sendMonthlyReport(profile, now).catch((err) =>
+          logger.error({ err: String(err), userId: profile.userId }, "monthly report failed")
+        )
+      )
+    );
+    processed += batch.length;
   }
 }
 
