@@ -5,12 +5,13 @@ import type { Profile } from "./types";
 import { Onboarding } from "./screens/Onboarding";
 import { Today } from "./screens/Today";
 import { Recipes } from "./screens/Recipes";
+import { Challenges } from "./screens/Challenges";
 import { Analytics } from "./screens/Analytics";
 import { Settings } from "./screens/Settings";
 import { Subscription } from "./screens/Subscription";
 import { Admin } from "./screens/Admin";
 
-type Tab = "today" | "recipes" | "analytics" | "settings" | "subscription" | "admin";
+type Tab = "today" | "recipes" | "challenges" | "analytics" | "settings" | "subscription" | "admin";
 
 function initialRoute(): { tab: Tab; mealId?: number } {
   const url = new URL(window.location.href);
@@ -19,6 +20,7 @@ function initialRoute(): { tab: Tab; mealId?: number } {
   if (mealParam && /^\d+$/.test(mealParam)) return { tab: "today", mealId: Number(mealParam) };
   const screen = url.searchParams.get("screen") ?? start;
   if (screen === "recipes") return { tab: "recipes" };
+  if (screen === "challenges") return { tab: "challenges" };
   if (screen === "settings") return { tab: "settings" };
   if (screen === "subscription") return { tab: "subscription" };
   if (screen === "analytics") return { tab: "analytics" };
@@ -88,6 +90,7 @@ export default function App() {
     <>
       {tab === "today" && <Today profile={profile} initialMealId={route.mealId} userName={userName} />}
       {tab === "recipes" && <Recipes />}
+      {tab === "challenges" && <Challenges />}
       {tab === "analytics" && <Analytics plan={plan} onGoPro={() => setTab("subscription")} />}
       {tab === "settings" && profile && <Settings profile={profile} onSaved={setProfile} />}
       {tab === "subscription" && <Subscription />}
@@ -98,6 +101,7 @@ export default function App() {
           [
             ["today", "🍽", "Сегодня"],
             ["recipes", "🍲", "Блюда"],
+            ["challenges", "🎯", "Челлендж"],
             ["analytics", "📈", "Аналитика"],
             ["settings", "⚙️", "Настройки"],
             ["subscription", "⭐", "Pro"],

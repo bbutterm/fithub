@@ -251,3 +251,61 @@ export async function historyFacts(userId: number, tz: string): Promise<DayFacts
 }
 
 export { describeRule };
+
+export interface ParticipantRow {
+  userId: number;
+  firstName: string | null;
+  isMe: boolean;
+  passed: number;
+  frozen: number;
+  status: string;
+}
+
+/**
+ * Таблица участников совместного челленджа.
+ *
+ * Показываем только «сколько дней засчитано» — не калории и не вес. Если
+ * раскрывать цифры питания, вступать перестанут, а совместные челленджи это
+ * единственный органический канал, по которому в бота приходят новые люди.
+ */
+export async function participantsOf(challengeId: number, meUserId: number): Promise<ParticipantRow[]> {
+  const [parts, days] = await Promise.all([
+    prisma.challengeParticipant.findMany({
+      where: { challengeId, status: { not: "quit" } },
+      include: { user: { select: { id: true, firstName: true } } }
+    }),
+    prisma.challengeDay.findMany({ where: { challengeId }, select: { userId: true, status: true } })
+  ]);
+  return parts
+    .map((p) => {
+      const mine = days.filter((d) => d.userId === p.userId);
+      return {
+        userId: p.userId,
+        firstName: p.user.firstName,
+        isMe: p.userId === meUserId,
+        passed: mine.filter((d) => d.status === "pass").length,
+        frozen: mine.filter((d) => d.status === "frozen").length,
+        status: p.status
+      };
+    })
+    .sort((a, b) => b.passed - a.passed);
+}
+
+/** Результаты по дням — для календаря в Mini App. */
+export async function dayResultsOf(challengeId: number, userId: number) {
+  return prisma.challengeDay.findMany({
+    where: { challengeId, userId },
+    orderBy: { date: "asc" },
+    select: { date: true, status: true, fact: true }
+  });
+}
+
+/** Завершённые челленджи пользователя — история на экране. */
+export async function finishedChallengesOf(userId: number) {
+  return prisma.challengeParticipant.findMany({
+    where: { userId, status: { in: ["done", "quit"] } },
+    include: { challenge: true },
+    orderBy: { joinedAt: "desc" },
+    take: 10
+  });
+}

@@ -145,3 +145,58 @@ export interface Recipe {
   timesUsed: number;
   lastUsedAt: string | null;
 }
+
+export interface ChallengeDayResult {
+  date: string;
+  status: "pass" | "fail" | "frozen" | "skip";
+  fact: string | null;
+}
+
+export interface ChallengeParticipantRow {
+  userId: number;
+  firstName: string | null;
+  isMe: boolean;
+  passed: number;
+  frozen: number;
+  status: string;
+}
+
+export interface ActiveChallenge {
+  id: number;
+  title: string;
+  ruleText: string;
+  startDate: string;
+  totalDays: number;
+  /** Номер текущего дня; меньше 1 — челлендж ещё не стартовал. */
+  dayNo: number;
+  joinCode: string;
+  /** Готовая ссылка-приглашение; пустая, если Telegram не ответил. */
+  inviteUrl: string;
+  jokersLeft: number;
+  progress: { passed: number; failed: number; skipped: number; frozen: number; total: number };
+  days: ChallengeDayResult[];
+  participants: ChallengeParticipantRow[];
+}
+
+export interface ChallengeTemplate {
+  id: string;
+  title: string;
+  hint: string;
+  days: number;
+  ruleText: string;
+}
+
+export interface ChallengesResponse {
+  active: ActiveChallenge | null;
+  finished: Array<{ id: number; title: string; totalDays: number; status: string }>;
+  templates: ChallengeTemplate[];
+}
+
+/** Оценка выполнимости по собственной истории — до старта, а не после провала. */
+export interface Feasibility {
+  verdict: "ok" | "risky" | "refuse";
+  reason: string;
+  suggestedValue?: number;
+  metDays?: number;
+  loggedDays?: number;
+}

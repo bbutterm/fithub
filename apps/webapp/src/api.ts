@@ -4,8 +4,10 @@ import type {
   AdminUsageRow,
   AdminUser,
   AnalyticsResponse,
+  ChallengesResponse,
   DayResponse,
   DietPreset,
+  Feasibility,
   Meal,
   MeResponse,
   Profile,
@@ -75,6 +77,15 @@ export function photoUrl(meal: { id: number; photoToken: string | null }, thumb 
 export const api = {
   me: () => request<MeResponse>("/api/me"),
   diets: () => request<{ diets: DietPreset[] }>("/api/diets"),
+  challenges: () => request<ChallengesResponse>("/api/challenges"),
+  challengeFeasibility: (template: string) =>
+    request<Feasibility>(`/api/challenges/feasibility?template=${encodeURIComponent(template)}`),
+  startChallenge: (template: string, value?: number) =>
+    request<{ id: number; joinCode: string; startDate: string }>("/api/challenges", {
+      method: "POST",
+      body: JSON.stringify({ template, value })
+    }),
+  quitChallenge: (id: number) => request<{ ok: true }>(`/api/challenges/${id}`, { method: "DELETE" }),
   recipes: () => request<{ recipes: Recipe[] }>("/api/recipes"),
   saveRecipe: (mealId: number, name?: string) =>
     request<{ recipe: Recipe; updated: boolean }>("/api/recipes", {

@@ -96,25 +96,25 @@ export function Recipes() {
                 <p className="hint small mb">Сколько съели?</p>
                 <div className="row wrap mb">
                   {PORTIONS.map((p) => (
-                    <button key={p.value} disabled={busy} onClick={() => void log(r, p.value)}>
+                    <button key={p.value} className="chip" disabled={busy} onClick={() => void log(r, p.value)}>
                       {p.label}
                     </button>
                   ))}
                 </div>
                 <div className="row wrap">
-                  <button className="secondary" onClick={() => setOpen(null)}>
+                  <button className="chip" onClick={() => setOpen(null)}>
                     Отмена
                   </button>
-                  <button className="secondary" onClick={() => void rename(r)}>
+                  <button className="chip" onClick={() => void rename(r)}>
                     Переименовать
                   </button>
-                  <button className="secondary" onClick={() => void remove(r)}>
+                  <button className="chip" onClick={() => void remove(r)}>
                     Удалить
                   </button>
                 </div>
               </>
             ) : (
-              <button onClick={() => setOpen(r.id)}>Записать в дневник</button>
+              <button className="btn" onClick={() => setOpen(r.id)}>Записать в дневник</button>
             )}
           </div>
         ))

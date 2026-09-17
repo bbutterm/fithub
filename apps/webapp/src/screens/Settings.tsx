@@ -293,7 +293,7 @@ export function Settings({ profile, onSaved }: Props) {
             <p className="hint small mb">
               Удалит профиль, все записи о еде, советы и отчёты. Отменить будет нельзя.
             </p>
-            <button className="secondary" onClick={() => void askDelete()}>
+            <button className="btn secondary" onClick={() => void askDelete()}>
               Удалить аккаунт
             </button>
           </>
@@ -305,8 +305,8 @@ export function Settings({ profile, onSaved }: Props) {
                 : "Будет удалено всё: профиль, записи о еде, советы и отчёты."}
             </p>
             <div className="row wrap">
-              <button onClick={() => setDeleteStep("idle")}>Отмена</button>
-              <button className="secondary" disabled={deleteStep === "deleting"} onClick={() => void confirmDelete()}>
+              <button className="chip" onClick={() => setDeleteStep("idle")}>Отмена</button>
+              <button className="btn danger" disabled={deleteStep === "deleting"} onClick={() => void confirmDelete()}>
                 {deleteStep === "deleting" ? "Удаляю…" : "Да, удалить навсегда"}
               </button>
             </div>

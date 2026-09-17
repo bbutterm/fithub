@@ -22,6 +22,19 @@ import { refundRecognition, tryConsumeRecognition } from "../services/limits.js"
 import { localDateStr } from "../utils/tz.js";
 import { DIET_PRESETS, normalizeDiets } from "../diets.js";
 import { deleteRecipe, getRecipeForUser, itemsOf, listRecipes, logRecipe, renameRecipe, saveMealAsRecipe } from "../services/recipes.js";
+import {
+  activeChallengeOf,
+  createChallenge,
+  dayNumber,
+  dayResultsOf,
+  finishedChallengesOf,
+  historyFacts,
+  participantsOf,
+  progressOf,
+  quitChallenge,
+  ruleOf
+} from "../services/challenges.js";
+import { assessFeasibility, CHALLENGE_TEMPLATES, describeRule, getTemplate, withValue } from "../challenges.js";
 import { PLAN_PAYLOADS } from "../bot/payments.js";
 import { bot } from "../bot/bot.js";
 
@@ -104,6 +117,22 @@ function getWaitUntil(): ((p: Promise<unknown>) => void) | undefined {
   const store = (globalThis as unknown as Record<symbol, { get?: () => { waitUntil?: (p: Promise<unknown>) => void } } | undefined>)[sym];
   const waitUntil = store?.get?.()?.waitUntil;
   return typeof waitUntil === "function" ? waitUntil : undefined;
+}
+
+/**
+ * Имя бота для ссылок-приглашений. Берётся у Telegram один раз на инстанс:
+ * зашивать его в код нельзя — оно меняется вместе с BOT_TOKEN.
+ */
+let botUsernameCache: string | null = null;
+async function inviteBase(): Promise<string> {
+  if (!botUsernameCache) {
+    try {
+      botUsernameCache = (await bot.api.getMe()).username;
+    } catch {
+      return ""; // Telegram недоступен — отдадим только код, ссылку соберёт клиент
+    }
+  }
+  return `https://t.me/${botUsernameCache}?start=ch_`;
 }
 
 // Межинстансовая дедупликация update_id через БД (таблица создаётся сама, миграция не нужна)
@@ -353,6 +382,107 @@ export async function buildServer() {
 
   app.delete("/api/recipes/:id", { preHandler: authenticate }, async (request) => {
     await deleteRecipe(Number((request.params as { id: string }).id), request.user.uid);
+    return { ok: true };
+  });
+
+  // --- Челленджи ---
+
+  /** Состояние экрана целиком: активный челлендж, шаблоны и история. */
+  app.get("/api/challenges", { preHandler: authenticate }, async (request) => {
+    const uid = request.user.uid;
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: uid } });
+    const part = await activeChallengeOf(uid);
+
+    const active = part
+      ? await (async () => {
+          const ch = part.challenge;
+          const [progress, days, participants] = await Promise.all([
+            progressOf(ch.id, uid, ch.days),
+            dayResultsOf(ch.id, uid),
+            participantsOf(ch.id, uid)
+          ]);
+          return {
+            id: ch.id,
+            title: ch.title,
+            ruleText: describeRule(ruleOf(ch)),
+            startDate: ch.startDate,
+            totalDays: ch.days,
+            dayNo: dayNumber(ch, localDateStr(user.tz)),
+            joinCode: ch.joinCode,
+            inviteUrl: `${await inviteBase()}${ch.joinCode}`,
+            jokersLeft: part.jokersLeft,
+            progress,
+            days,
+            participants
+          };
+        })()
+      : null;
+
+    const finished = (await finishedChallengesOf(uid)).map((p) => ({
+      id: p.challenge.id,
+      title: p.challenge.title,
+      totalDays: p.challenge.days,
+      status: p.status
+    }));
+
+    return {
+      active,
+      finished,
+      templates: CHALLENGE_TEMPLATES.map((t) => ({
+        id: t.id,
+        title: t.title,
+        hint: t.hint,
+        days: t.days,
+        ruleText: describeRule(t.rule)
+      }))
+    };
+  });
+
+  /** Выполнимость шаблона по собственной истории — до старта, а не после провала. */
+  app.get("/api/challenges/feasibility", { preHandler: authenticate }, async (request, reply) => {
+    const q = request.query as { template?: string };
+    const template = getTemplate(q.template ?? "");
+    if (!template) return reply.code(404).send({ error: "not_found" });
+    const uid = request.user.uid;
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: uid } });
+    const [profile, history] = await Promise.all([
+      prisma.profile.findUnique({ where: { userId: uid } }),
+      historyFacts(uid, user.tz)
+    ]);
+    const check = assessFeasibility({
+      rule: template.rule,
+      days: template.days,
+      history,
+      profile: profile ? { weightKg: profile.weightKg, gender: profile.gender, targetKcal: profile.targetKcal } : null
+    });
+    return check;
+  });
+
+  app.post("/api/challenges", { preHandler: authenticate }, async (request, reply) => {
+    const body = z
+      .object({ template: z.string().min(1), value: z.number().int().positive().optional() })
+      .safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: "bad_request" });
+    const template = getTemplate(body.data.template);
+    if (!template) return reply.code(404).send({ error: "not_found" });
+    const uid = request.user.uid;
+    // Один активный челлендж: три сразу — это ноль выполненных
+    if (await activeChallengeOf(uid)) return reply.code(409).send({ error: "already_active" });
+
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: uid } });
+    const rule = body.data.value ? withValue(template.rule, body.data.value) : template.rule;
+    const challenge = await createChallenge({
+      ownerId: uid,
+      title: template.title,
+      rule,
+      days: template.days,
+      tz: user.tz
+    });
+    return { id: challenge.id, joinCode: challenge.joinCode, startDate: challenge.startDate };
+  });
+
+  app.delete("/api/challenges/:id", { preHandler: authenticate }, async (request) => {
+    await quitChallenge(Number((request.params as { id: string }).id), request.user.uid);
     return { ok: true };
   });
 
