@@ -1,0 +1,61 @@
+name: CI
+
+# Проверки на каждый пуш и каждый PR. Держать зелёным: сюда попадают ровно те
+# ошибки, которые человек не замечает неделями — сломанная типизация, забытая
+# ветка кода, упавший тест.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Prisma Client генерируется из схемы: без него не соберётся типизация
+      # моделей, и typecheck упадёт на любом обращении к prisma.*
+      - run: pnpm --filter bot-api prisma:generate
+
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+
+      # Сборка Mini App: ловит ошибки, которых нет в typecheck (импорты, ассеты)
+      - run: pnpm --filter webapp build
+
+      # Миграции должны накатываться на чистую базу от начала до конца.
+      # Ошибка здесь означает, что прод и репозиторий разъедутся при следующем deploy.
+      - name: Проверка миграций на чистом PostgreSQL
+        run: |
+          docker run -d --name pg -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:17
+          for i in $(seq 1 30); do
+            docker exec pg pg_isready -U postgres >/dev/null 2>&1 && break
+            sleep 1
+          done
+          for f in apps/bot-api/prisma/migrations/*/migration.sql; do
+            echo "--- $f"
+            docker exec -i pg psql -U postgres -v ON_ERROR_STOP=1 -q < "$f"
+          done
+          echo "Таблиц в public:"
+          docker exec pg psql -U postgres -At -c \
+            "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r'"
+          echo "Таблиц без RLS (должно быть пусто):"
+          docker exec pg psql -U postgres -At -c \
+            "select string_agg(tablename,', ') from pg_tables where schemaname='public' and not rowsecurity"
