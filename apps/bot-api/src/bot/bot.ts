@@ -486,10 +486,12 @@ async function handleContextualText(
         getDay(user.id, localDateStr(user.tz), user.tz),
         getDailyStats(user.id, user.tz, 14)
       ]);
+      // Третья точка создания приёма — та же проверка режима, что у фото и текста без контекста
+      const checked = await applyDietCheck(meal, profile);
       await ctx.api.editMessageText(
         ctx.chat.id,
         status.message_id,
-        formatMealCard({ meal, dayKcal: day.totals.totalKcal, targetKcal: profile?.targetKcal ?? null, streak: calcStreak(weekStats), tz: user.tz }),
+        formatMealCard({ meal: checked, dayKcal: day.totals.totalKcal, targetKcal: profile?.targetKcal ?? null, streak: calcStreak(weekStats), tz: user.tz }),
         { parse_mode: "HTML", reply_markup: mealKeyboard(meal.id) }
       );
       await prisma.meal.update({ where: { id: meal.id }, data: { tgMessageId: BigInt(status.message_id) } }).catch(() => undefined);
