@@ -480,7 +480,14 @@ async function handleContextualText(
         return;
       }
       await incrementRecognitionCount(user);
-      const meal = await createMealFromRecognition({ userId: user.id, recognition: res, source: "text" });
+      const meal = await createMealFromRecognition({
+        userId: user.id,
+        recognition: res,
+        source: "text",
+        // «на завтрак в 8:00 ел овсянку» — модель возвращает eaten_time и для новой еды,
+        // а не только для уточнений; раньше оно здесь молча терялось
+        eatenAt: res.eaten_time ? eatenTimeToUtc(res.eaten_time, user.tz) : undefined
+      });
       const [profile, day, weekStats] = await Promise.all([
         prisma.profile.findUnique({ where: { userId: user.id } }),
         getDay(user.id, localDateStr(user.tz), user.tz),

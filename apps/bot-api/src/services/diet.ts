@@ -18,10 +18,14 @@ export async function applyDietCheck(meal: MealWithItems, profile: Profile | nul
     profile,
     userId: meal.userId
   });
-  if (!verdict) return meal;
+  // Нет вердикта — старую отметку убираем, а не оставляем: после уточнения
+  // состава она относилась бы к другим блюдам, а после отключения режима —
+  // к режиму, которого больше нет. Пустая карточка честнее устаревшей.
+  const data = verdict
+    ? { dietNote: verdict.note, dietVerdict: verdict.verdict }
+    : { dietNote: null, dietVerdict: null };
+  if (!verdict && !meal.dietNote) return meal;
 
-  await prisma.meal
-    .update({ where: { id: meal.id }, data: { dietNote: verdict.note, dietVerdict: verdict.verdict } })
-    .catch(() => undefined);
-  return { ...meal, dietNote: verdict.note, dietVerdict: verdict.verdict };
+  await prisma.meal.update({ where: { id: meal.id }, data }).catch(() => undefined);
+  return { ...meal, ...data };
 }
