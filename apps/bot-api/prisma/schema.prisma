@@ -25,6 +25,8 @@ model User {
   usage              UsageCounter[]
   aiUsage            AiUsage[]
   recipes            Recipe[]
+  ownedChallenges    Challenge[]            @relation("ChallengeOwner")
+  challenges         ChallengeParticipant[]
 }
 
 // Учёт каждого вызова ИИ: токены и стоимость (для админки)
@@ -215,6 +217,57 @@ model Recipe {
 
   @@unique([userId, name])
   @@index([userId, timesUsed])
+}
+
+/// Челлендж: правило, срок и участники.
+///
+/// Правило хранится как JSON (см. src/challenges.ts): типов правил будет больше,
+/// и добавление нового не должно требовать миграции типа.
+model Challenge {
+  id        Int      @id @default(autoincrement())
+  ownerId   Int
+  owner     User     @relation("ChallengeOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  title     String
+  rule      Json
+  /// Локальная дата старта автора, YYYY-MM-DD
+  startDate String
+  days      Int
+  /// Код приглашения: t.me/bot?start=ch_<code>
+  joinCode  String   @unique
+  createdAt DateTime @default(now())
+
+  participants ChallengeParticipant[]
+  dayResults   ChallengeDay[]
+}
+
+model ChallengeParticipant {
+  challengeId Int
+  challenge   Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  userId      Int
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt    DateTime  @default(now())
+  /// Заморозка на один день: без неё первый же сорванный день выгоняет человека совсем
+  jokersLeft  Int       @default(1)
+  /// active | done | quit
+  status      String    @default("active")
+
+  @@id([challengeId, userId])
+  @@index([userId, status])
+}
+
+model ChallengeDay {
+  challengeId Int
+  challenge   Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  userId      Int
+  /// Локальная дата пользователя, YYYY-MM-DD
+  date        String
+  /// pass | fail | skip | frozen
+  status      String
+  /// Факт дня строкой: «138 г», «первый приём в 09:00»
+  fact        String?
+  createdAt   DateTime  @default(now())
+
+  @@id([challengeId, userId, date])
 }
 
 model UsageCounter {

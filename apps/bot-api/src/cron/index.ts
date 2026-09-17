@@ -3,6 +3,7 @@ import { logger } from "../logger.js";
 import { runDailyAdviceTick } from "./dailyAdvice.js";
 import { runMonthlyReportTick } from "./monthlyReport.js";
 import { runSubscriptionExpiryTick } from "./subscriptions.js";
+import { runChallengeSummaryTick } from "./challengeSummary.js";
 
 export function startCronJobs(): void {
   // Ежедневные советы: каждые 15 минут ловим наступившее adviceTime в таймзоне пользователя
@@ -13,6 +14,11 @@ export function startCronJobs(): void {
   // Месячный отчёт (Pro): ежечасно проверяем «1-е число, после 10:00 локального времени»
   cron.schedule("0 * * * *", () => {
     runMonthlyReportTick().catch((err) => logger.error({ err: String(err) }, "monthly tick crashed"));
+  });
+
+  // Вечерние сводки челленджей: ежечасно ловим наступивший 21:00 участника
+  cron.schedule("5 * * * *", () => {
+    runChallengeSummaryTick().catch((err) => logger.error({ err: String(err) }, "challenge tick crashed"));
   });
 
   // Истечение подписок: ежедневно в 00:15 UTC

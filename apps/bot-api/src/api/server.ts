@@ -188,6 +188,16 @@ export async function buildServer() {
     await runDailyAdviceTick();
     return { ok: true };
   });
+  // Почасовой тик: и советы, и вечерние сводки челленджей ловят наступивший
+  // локальный час пользователя. Одна задача на оба дела — чтобы не держать
+  // два набора по 24 записи в vercel.json.
+  app.get("/api/cron/hourly", { preHandler: cronAuth }, async () => {
+    const { runDailyAdviceTick } = await import("../cron/dailyAdvice.js");
+    const { runChallengeSummaryTick } = await import("../cron/challengeSummary.js");
+    await runDailyAdviceTick();
+    await runChallengeSummaryTick();
+    return { ok: true };
+  });
   app.get("/api/cron/monthly", { preHandler: cronAuth }, async () => {
     const { runMonthlyReportTick } = await import("../cron/monthlyReport.js");
     await runMonthlyReportTick();

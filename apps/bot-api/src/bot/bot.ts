@@ -15,6 +15,18 @@ import {
 import { createMealFromRecognition, deleteMeal, getDay, replaceMealItems } from "../services/meals.js";
 import { applyDietCheck } from "../services/diet.js";
 import { getRecipeForUser, listRecipes, logRecipe, saveMealAsRecipe } from "../services/recipes.js";
+import {
+  activeChallengeOf,
+  challengeByCode,
+  createChallenge,
+  dayNumber,
+  historyFacts,
+  joinChallenge,
+  progressOf,
+  quitChallenge,
+  ruleOf
+} from "../services/challenges.js";
+import { assessFeasibility, CHALLENGE_TEMPLATES, describeRule, getTemplate, withValue } from "../challenges.js";
 import { checkBurstLimit, checkRecognitionLimit, refundRecognition, tryConsumeRecognition } from "../services/limits.js";
 import { acquireRecognitionLock, releaseRecognitionLock } from "../services/locks.js";
 import { calcStreak, getDailyStats } from "../services/stats.js";
@@ -181,6 +193,7 @@ const START_TEXT = [
   "Команды:",
   "/day — сводка за сегодня",
   "/food — мои блюда: записать привычное одним тапом, без фото",
+  "/challenge — челленджи: бот сам проверяет по вашим записям",
   "/settings — настройки",
   "/delete — удалить аккаунт и все записи",
   "",
@@ -290,7 +303,46 @@ async function handleCorrection(ctx: Context, userId: number, mealTgMessageId: n
 
 bot.command("start", async (ctx) => {
   if (!ctx.from) return;
-  await upsertUserFromTelegram(ctx.from);
+  const started = await upsertUserFromTelegram(ctx.from);
+
+  // Приглашение в челлендж: t.me/bot?start=ch_ABC123
+  const payload = ctx.match?.toString().trim() ?? "";
+  if (payload.startsWith("ch_")) {
+    const challenge = await challengeByCode(payload.slice(3));
+    if (challenge) {
+      const rule = ruleOf(challenge);
+      // Выполнимость считаем для ВСТУПАЮЩЕГО, а не для автора: иначе один
+      // амбициозный человек приведёт друзей и всех отпугнёт за неделю
+      const [profile, history] = await Promise.all([
+        prisma.profile.findUnique({ where: { userId: started.id } }),
+        historyFacts(started.id, started.tz)
+      ]);
+      const check = assessFeasibility({
+        rule,
+        days: challenge.days,
+        history,
+        profile: profile
+          ? { weightKg: profile.weightKg, gender: profile.gender, targetKcal: profile.targetKcal }
+          : null
+      });
+      const joined = await joinChallenge(challenge.id, started.id);
+      await ctx.reply(
+        [
+          joined ? `🎯 Вы в челлендже <b>${challenge.title}</b>` : `🎯 <b>${challenge.title}</b>`,
+          "",
+          describeRule(rule),
+          `Срок: ${challenge.days} дней.`,
+          check.reason ? `\n${check.reason}` : "",
+          joined ? "\nИтог дня буду присылать вечером." : "\nСначала завершите текущий челлендж — /challenge"
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+  }
+
   await ctx.reply(START_TEXT, {
     parse_mode: "HTML",
     reply_markup: new InlineKeyboard().webApp("🥗 Открыть приложение", config.WEBAPP_URL)
@@ -403,6 +455,163 @@ bot.callbackQuery(/^rcp:u:(\d+):(\d+)$/, async (ctx) => {
   const meal = await logRecipe(recipe, multiplier);
   const messageId = ctx.callbackQuery.message?.message_id;
   if (messageId) await publishMealCard(ctx, user, meal, messageId);
+});
+
+
+// --- Челленджи ---
+
+function templatesKeyboard(): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  for (const t of CHALLENGE_TEMPLATES) kb.text(t.title, `ch:t:${t.id}`).row();
+  return kb;
+}
+
+/** Карточка активного челленджа: где человек находится и сколько осталось. */
+async function showActiveChallenge(ctx: Context, userId: number, tz: string): Promise<boolean> {
+  const part = await activeChallengeOf(userId);
+  if (!part) return false;
+  const ch = part.challenge;
+  const today = localDateStr(tz);
+  const dayNo = dayNumber(ch, today);
+  const progress = await progressOf(ch.id, userId, ch.days);
+  const notStarted = dayNo < 1;
+
+  const lines = [
+    `🎯 <b>${ch.title}</b>`,
+    "",
+    describeRule(ruleOf(ch)),
+    notStarted ? `Старт завтра, ${ch.startDate}.` : `День ${Math.min(dayNo, ch.days)} из ${ch.days}.`,
+    `Засчитано: <b>${progress.passed}</b>${progress.frozen ? ` · заморозок использовано: ${progress.frozen}` : ""}`,
+    `Заморозок осталось: ${part.jokersLeft}`,
+    "",
+    "Итог дня приходит вечером — считать ничего не нужно, я смотрю по вашим записям.",
+    "",
+    `Позвать друга: <code>t.me/${(ctx.me?.username ?? "bot")}?start=ch_${ch.joinCode}</code>`
+  ];
+  await ctx.reply(lines.join("\n"), {
+    parse_mode: "HTML",
+    reply_markup: new InlineKeyboard().text("Бросить челлендж", `ch:quit:${ch.id}`)
+  });
+  return true;
+}
+
+bot.command("challenge", async (ctx) => {
+  if (!ctx.from) return;
+  const user = await upsertUserFromTelegram(ctx.from);
+  if (await showActiveChallenge(ctx, user.id, user.tz)) return;
+  await ctx.reply(
+    [
+      "🎯 <b>Челленджи</b>",
+      "",
+      "Выберите челлендж — я буду сам проверять его по вашим записям и присылать итог каждый вечер.",
+      "Отмечать ничего не нужно.",
+      "",
+      "Одновременно идёт один челлендж: три сразу — это ноль выполненных."
+    ].join("\n"),
+    { parse_mode: "HTML", reply_markup: templatesKeyboard() }
+  );
+});
+
+bot.callbackQuery(/^ch:t:(\w+)$/, async (ctx) => {
+  if (!ctx.from) return;
+  const user = await upsertUserFromTelegram(ctx.from);
+  const template = getTemplate(ctx.match[1] ?? "");
+  if (!template) {
+    await ctx.answerCallbackQuery({ text: "Челлендж не найден" });
+    return;
+  }
+  await ctx.answerCallbackQuery();
+
+  // Выполнимость считаем по его собственным записям: абстрактную норму человек
+  // проигнорирует, свои цифры — заметно реже
+  const [profile, history] = await Promise.all([
+    prisma.profile.findUnique({ where: { userId: user.id } }),
+    historyFacts(user.id, user.tz)
+  ]);
+  const check = assessFeasibility({
+    rule: template.rule,
+    days: template.days,
+    history,
+    profile: profile
+      ? { weightKg: profile.weightKg, gender: profile.gender, targetKcal: profile.targetKcal }
+      : null
+  });
+
+  const lines = [`🎯 <b>${template.title}</b>`, "", describeRule(template.rule), `Срок: ${template.days} дней.`];
+  if (check.reason) lines.push("", check.reason);
+
+  if (check.verdict === "refuse") {
+    await ctx.editMessageText(lines.join("\n"), { parse_mode: "HTML", reply_markup: templatesKeyboard() }).catch(() => undefined);
+    return;
+  }
+
+  const kb = new InlineKeyboard();
+  if (check.verdict === "risky" && check.suggestedValue !== undefined) {
+    kb.text(`Взять ${check.suggestedValue}`, `ch:s:${template.id}:${check.suggestedValue}`).row();
+    kb.text("Всё равно как есть", `ch:s:${template.id}:0`).row();
+  } else {
+    kb.text("Начать", `ch:s:${template.id}:0`).row();
+  }
+  kb.text("↩️ К списку", "ch:list");
+  lines.push("", "Старт — с завтрашнего дня: сегодняшний уже наполовину прошёл.");
+  await ctx.editMessageText(lines.join("\n"), { parse_mode: "HTML", reply_markup: kb }).catch(() => undefined);
+});
+
+bot.callbackQuery("ch:list", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx
+    .editMessageText("🎯 <b>Челленджи</b>\n\nВыберите — я буду проверять его сам по вашим записям.", {
+      parse_mode: "HTML",
+      reply_markup: templatesKeyboard()
+    })
+    .catch(() => undefined);
+});
+
+bot.callbackQuery(/^ch:s:(\w+):(\d+)$/, async (ctx) => {
+  if (!ctx.from) return;
+  const user = await upsertUserFromTelegram(ctx.from);
+  const template = getTemplate(ctx.match[1] ?? "");
+  if (!template) {
+    await ctx.answerCallbackQuery({ text: "Челлендж не найден" });
+    return;
+  }
+  if (await activeChallengeOf(user.id)) {
+    await ctx.answerCallbackQuery({ text: "У вас уже идёт челлендж", show_alert: true });
+    return;
+  }
+  const override = Number(ctx.match[2]);
+  const rule = override > 0 ? withValue(template.rule, override) : template.rule;
+  const challenge = await createChallenge({
+    ownerId: user.id,
+    title: template.title,
+    rule,
+    days: template.days,
+    tz: user.tz
+  });
+  await ctx.answerCallbackQuery({ text: "Поехали!" });
+  await ctx
+    .editMessageText(
+      [
+        `🎯 <b>${challenge.title}</b> — стартует завтра`,
+        "",
+        describeRule(rule),
+        `Срок: ${challenge.days} дней. Заморозка: 1 — на случай сорванного дня.`,
+        "",
+        "Каждый вечер пришлю итог дня. Отмечать ничего не нужно: я смотрю по вашим записям о еде.",
+        "",
+        `Позвать друга: <code>t.me/${ctx.me?.username ?? "bot"}?start=ch_${challenge.joinCode}</code>`
+      ].join("\n"),
+      { parse_mode: "HTML" }
+    )
+    .catch(() => undefined);
+});
+
+bot.callbackQuery(/^ch:quit:(\d+)$/, async (ctx) => {
+  if (!ctx.from) return;
+  const user = await upsertUserFromTelegram(ctx.from);
+  await quitChallenge(Number(ctx.match[1]), user.id);
+  await ctx.answerCallbackQuery({ text: "Челлендж закрыт" });
+  await ctx.editMessageText("Челлендж закрыт. Новый — /challenge").catch(() => undefined);
 });
 
 bot.command("delete", async (ctx) => {
