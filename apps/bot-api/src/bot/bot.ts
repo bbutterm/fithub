@@ -1,4 +1,5 @@
 import { Bot, InlineKeyboard, type Context } from "grammy";
+import type { Meal, MealItem } from "@prisma/client";
 import { prisma } from "../db.js";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
@@ -21,6 +22,8 @@ import { addDays, localDateStr, zonedTimeToUtc } from "../utils/tz.js";
 import { formatDaySummary, formatMealCard } from "./cards.js";
 import { checkRateLimit } from "./queue.js";
 import { paywallKeyboard, registerPaymentHandlers } from "./payments.js";
+
+type MealWithItems = Meal & { items: MealItem[] };
 
 export const bot = new Bot(config.BOT_TOKEN);
 
@@ -70,6 +73,56 @@ function timeKeyboard(mealId: number): InlineKeyboard {
     .text("↩️ Назад", `meal:tb:${mealId}`);
 }
 
+/**
+ * Собрать и отрисовать карточку приёма пищи.
+ *
+ * Последовательность «взять профиль и итоги дня → сверить с режимом питания →
+ * отрисовать» была скопирована в трёх местах: фото, текст без контекста и текст
+ * при наличии недавней записи. Из-за этого проверка режима однажды попала в две
+ * точки из трёх. Теперь она одна.
+ */
+async function renderMealCard(
+  userId: number,
+  tz: string,
+  meal: MealWithItems,
+  opts: { checkDiet?: boolean } = {}
+): Promise<string> {
+  const [profile, day, weekStats] = await Promise.all([
+    prisma.profile.findUnique({ where: { userId } }),
+    getDay(userId, localDateStr(tz), tz),
+    getDailyStats(userId, tz, 14)
+  ]);
+  const checked = opts.checkDiet ? await applyDietCheck(meal, profile) : meal;
+  return formatMealCard({
+    meal: checked,
+    dayKcal: day.totals.totalKcal,
+    targetKcal: profile?.targetKcal ?? null,
+    streak: calcStreak(weekStats),
+    tz
+  });
+}
+
+/**
+ * Показать карточку только что созданного приёма в статус-сообщении и запомнить
+ * его message_id: ответ на карточку = уточнение именно этой записи.
+ */
+async function publishMealCard(
+  ctx: Context,
+  user: { id: number; tz: string },
+  meal: MealWithItems,
+  statusMessageId: number
+): Promise<void> {
+  if (!ctx.chat) return;
+  const text = await renderMealCard(user.id, user.tz, meal, { checkDiet: true });
+  await ctx.api.editMessageText(ctx.chat.id, statusMessageId, text, {
+    parse_mode: "HTML",
+    reply_markup: mealKeyboard(meal.id)
+  });
+  await prisma.meal
+    .update({ where: { id: meal.id }, data: { tgMessageId: BigInt(statusMessageId) } })
+    .catch(() => undefined);
+}
+
 /** Перерисовать карточку приёма (после смены времени/состава). */
 async function redrawMealCard(
   ctx: Context,
@@ -83,27 +136,11 @@ async function redrawMealCard(
 ): Promise<void> {
   if (!ctx.chat) return;
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-  const found = await prisma.meal.findFirst({ where: { id: mealId, userId }, include: { items: true } });
-  if (!found) return;
-  const [profile, day, weekStats] = await Promise.all([
-    prisma.profile.findUnique({ where: { userId } }),
-    getDay(userId, localDateStr(user.tz), user.tz),
-    getDailyStats(userId, user.tz, 14)
-  ]);
-  const meal = opts.recheckDiet ? await applyDietCheck(found, profile) : found;
+  const meal = await prisma.meal.findFirst({ where: { id: mealId, userId }, include: { items: true } });
+  if (!meal) return;
+  const text = await renderMealCard(userId, user.tz, meal, { checkDiet: opts.recheckDiet });
   await ctx.api
-    .editMessageText(
-      ctx.chat.id,
-      messageId,
-      formatMealCard({
-        meal,
-        dayKcal: day.totals.totalKcal,
-        targetKcal: profile?.targetKcal ?? null,
-        streak: calcStreak(weekStats),
-        tz: user.tz
-      }),
-      { parse_mode: "HTML", reply_markup: mealKeyboard(mealId) }
-    )
+    .editMessageText(ctx.chat.id, messageId, text, { parse_mode: "HTML", reply_markup: mealKeyboard(mealId) })
     .catch(() => undefined);
 }
 
@@ -170,26 +207,7 @@ async function handleRecognition(params: {
       photoFileId: params.photoFileId,
       photoThumbFileId: params.photoThumbFileId
     });
-    const [profile, day, weekStats] = await Promise.all([
-      prisma.profile.findUnique({ where: { userId: user.id } }),
-      getDay(user.id, localDateStr(user.tz), user.tz),
-      getDailyStats(user.id, user.tz, 14)
-    ]);
-    const checked = await applyDietCheck(meal, profile);
-    await ctx.api.editMessageText(
-      ctx.chat.id,
-      status.message_id,
-      formatMealCard({
-        meal: checked,
-        dayKcal: day.totals.totalKcal,
-        targetKcal: profile?.targetKcal ?? null,
-        streak: calcStreak(weekStats),
-        tz: user.tz
-      }),
-      { parse_mode: "HTML", reply_markup: mealKeyboard(meal.id) }
-    );
-    // Запоминаем message_id карточки: ответ на неё = уточнение распознавания
-    await prisma.meal.update({ where: { id: meal.id }, data: { tgMessageId: BigInt(status.message_id) } }).catch(() => undefined);
+    await publishMealCard(ctx, user, meal, status.message_id);
   } catch (err) {
     const message =
       err instanceof NoFoodError
@@ -491,20 +509,7 @@ async function handleContextualText(
         // а не только для уточнений; раньше оно здесь молча терялось
         eatenAt: res.eaten_time ? eatenTimeToUtc(res.eaten_time, user.tz) : undefined
       });
-      const [profile, day, weekStats] = await Promise.all([
-        prisma.profile.findUnique({ where: { userId: user.id } }),
-        getDay(user.id, localDateStr(user.tz), user.tz),
-        getDailyStats(user.id, user.tz, 14)
-      ]);
-      // Третья точка создания приёма — та же проверка режима, что у фото и текста без контекста
-      const checked = await applyDietCheck(meal, profile);
-      await ctx.api.editMessageText(
-        ctx.chat.id,
-        status.message_id,
-        formatMealCard({ meal: checked, dayKcal: day.totals.totalKcal, targetKcal: profile?.targetKcal ?? null, streak: calcStreak(weekStats), tz: user.tz }),
-        { parse_mode: "HTML", reply_markup: mealKeyboard(meal.id) }
-      );
-      await prisma.meal.update({ where: { id: meal.id }, data: { tgMessageId: BigInt(status.message_id) } }).catch(() => undefined);
+      await publishMealCard(ctx, user, meal, status.message_id);
       return;
     }
 
