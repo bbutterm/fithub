@@ -122,3 +122,26 @@ export interface DietPreset {
   label: string;
   hint: string;
 }
+
+export interface RecipeItem {
+  dish: string;
+  grams: number;
+  kcal: number;
+  protein: number;
+  fat: number;
+  carbs: number;
+}
+
+/** Сохранённое блюдо: повтор записывается без вызова ИИ и не тратит лимит. */
+export interface Recipe {
+  id: number;
+  name: string;
+  portionGrams: number;
+  kcal: number;
+  protein: number;
+  fat: number;
+  carbs: number;
+  items: RecipeItem[];
+  timesUsed: number;
+  lastUsedAt: string | null;
+}

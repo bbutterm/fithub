@@ -9,6 +9,7 @@ import type {
   Meal,
   MeResponse,
   Profile,
+  Recipe,
   SubscriptionResponse
 } from "./types";
 
@@ -74,6 +75,17 @@ export function photoUrl(meal: { id: number; photoToken: string | null }, thumb 
 export const api = {
   me: () => request<MeResponse>("/api/me"),
   diets: () => request<{ diets: DietPreset[] }>("/api/diets"),
+  recipes: () => request<{ recipes: Recipe[] }>("/api/recipes"),
+  saveRecipe: (mealId: number, name?: string) =>
+    request<{ recipe: Recipe; updated: boolean }>("/api/recipes", {
+      method: "POST",
+      body: JSON.stringify({ mealId, name })
+    }),
+  logRecipe: (id: number, multiplier: number) =>
+    request<{ meal: Meal }>(`/api/recipes/${id}/log`, { method: "POST", body: JSON.stringify({ multiplier }) }),
+  renameRecipe: (id: number, name: string) =>
+    request<{ recipe: Recipe }>(`/api/recipes/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  deleteRecipe: (id: number) => request<{ ok: true }>(`/api/recipes/${id}`, { method: "DELETE" }),
   accountSummary: () =>
     request<{ meals: number; advices: number; hasProfile: boolean; createdAt: string }>("/api/me/summary"),
   deleteAccount: () => request<{ ok: true }>("/api/me", { method: "DELETE" }),

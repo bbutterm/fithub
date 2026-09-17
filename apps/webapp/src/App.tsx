@@ -4,12 +4,13 @@ import { getStartParam } from "./telegram";
 import type { Profile } from "./types";
 import { Onboarding } from "./screens/Onboarding";
 import { Today } from "./screens/Today";
+import { Recipes } from "./screens/Recipes";
 import { Analytics } from "./screens/Analytics";
 import { Settings } from "./screens/Settings";
 import { Subscription } from "./screens/Subscription";
 import { Admin } from "./screens/Admin";
 
-type Tab = "today" | "analytics" | "settings" | "subscription" | "admin";
+type Tab = "today" | "recipes" | "analytics" | "settings" | "subscription" | "admin";
 
 function initialRoute(): { tab: Tab; mealId?: number } {
   const url = new URL(window.location.href);
@@ -17,6 +18,7 @@ function initialRoute(): { tab: Tab; mealId?: number } {
   const mealParam = url.searchParams.get("meal") ?? (start.startsWith("meal_") ? start.slice(5) : null);
   if (mealParam && /^\d+$/.test(mealParam)) return { tab: "today", mealId: Number(mealParam) };
   const screen = url.searchParams.get("screen") ?? start;
+  if (screen === "recipes") return { tab: "recipes" };
   if (screen === "settings") return { tab: "settings" };
   if (screen === "subscription") return { tab: "subscription" };
   if (screen === "analytics") return { tab: "analytics" };
@@ -85,6 +87,7 @@ export default function App() {
   return (
     <>
       {tab === "today" && <Today profile={profile} initialMealId={route.mealId} userName={userName} />}
+      {tab === "recipes" && <Recipes />}
       {tab === "analytics" && <Analytics plan={plan} onGoPro={() => setTab("subscription")} />}
       {tab === "settings" && profile && <Settings profile={profile} onSaved={setProfile} />}
       {tab === "subscription" && <Subscription />}
@@ -94,6 +97,7 @@ export default function App() {
         {(
           [
             ["today", "🍽", "Сегодня"],
+            ["recipes", "🍲", "Блюда"],
             ["analytics", "📈", "Аналитика"],
             ["settings", "⚙️", "Настройки"],
             ["subscription", "⭐", "Pro"],

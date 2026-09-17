@@ -14,6 +14,7 @@ import {
 } from "../ai/food.js";
 import { createMealFromRecognition, deleteMeal, getDay, replaceMealItems } from "../services/meals.js";
 import { applyDietCheck } from "../services/diet.js";
+import { getRecipeForUser, listRecipes, logRecipe, saveMealAsRecipe } from "../services/recipes.js";
 import { checkBurstLimit, checkRecognitionLimit, refundRecognition, tryConsumeRecognition } from "../services/limits.js";
 import { acquireRecognitionLock, releaseRecognitionLock } from "../services/locks.js";
 import { calcStreak, getDailyStats } from "../services/stats.js";
@@ -55,7 +56,31 @@ function mealKeyboard(mealId: number): InlineKeyboard {
     .text("🗑 Удалить", `meal:del:${mealId}`)
     .row()
     .text("🕐 Время", `meal:time:${mealId}`)
+    // Сохранение прямо здесь, а не отдельной формой: ИИ уже разобрал состав,
+    // человеку остаётся один тап
+    .text("💾 В мои блюда", `meal:save:${mealId}`)
+    .row()
     .webApp("📊 Дневник", config.WEBAPP_URL);
+}
+
+/** Выбор порции: без множителя сохранённые блюда бесполезны — порции разные. */
+function portionKeyboard(recipeId: number): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("½ порции", `rcp:u:${recipeId}:5`)
+    .text("1 порция", `rcp:u:${recipeId}:10`)
+    .row()
+    .text("1½", `rcp:u:${recipeId}:15`)
+    .text("2 порции", `rcp:u:${recipeId}:20`)
+    .row()
+    .text("↩️ К списку", "rcp:list");
+}
+
+function recipeListKeyboard(recipes: Array<{ id: number; name: string; kcal: number }>): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  for (const r of recipes) {
+    kb.text(`${r.name} · ${Math.round(r.kcal)} ккал`, `rcp:p:${r.id}`).row();
+  }
+  return kb.webApp("📊 Дневник", config.WEBAPP_URL);
 }
 
 // Быстрый выбор времени приёма: сдвиги от «сейчас» и типовые часы (локальное время юзера)
@@ -150,10 +175,12 @@ const START_TEXT = [
   "<b>Просто пришли мне фото еды</b> — я определю блюда, посчитаю калории и БЖУ и запишу в дневник.",
   "💡 Подпиши фото названием блюда — распознавание будет точнее.",
   "✏️ Ошибся в распознавании? Ответь на карточку уточнением — пересчитаю.",
+  "💾 Ешь одно и то же? Сохрани блюдо кнопкой под карточкой — потом запишется одним тапом.",
   "Можно текстом или голосовым 🎙: «тарелка борща и два куска хлеба».",
   "",
   "Команды:",
   "/day — сводка за сегодня",
+  "/food — мои блюда: записать привычное одним тапом, без фото",
   "/settings — настройки",
   "/delete — удалить аккаунт и все записи",
   "",
@@ -293,6 +320,89 @@ bot.command("settings", async (ctx) => {
   await ctx.reply("Настройки профиля, целей и советов — в приложении:", {
     reply_markup: new InlineKeyboard().webApp("⚙️ Открыть настройки", `${config.WEBAPP_URL}?screen=settings`)
   });
+});
+
+bot.callbackQuery(/^meal:save:(\d+)$/, async (ctx) => {
+  if (!ctx.from) return;
+  const user = await upsertUserFromTelegram(ctx.from);
+  const meal = await prisma.meal.findFirst({
+    where: { id: Number(ctx.match[1]), userId: user.id },
+    include: { items: true }
+  });
+  if (!meal || meal.items.length === 0) {
+    await ctx.answerCallbackQuery({ text: "Запись не найдена" });
+    return;
+  }
+  const { recipe, updated } = await saveMealAsRecipe(meal);
+  await ctx.answerCallbackQuery({
+    text: `${updated ? "Обновил" : "Сохранил"}: ${recipe.name}. Повторить — /food`,
+    show_alert: false
+  });
+});
+
+/** Список сохранённых блюд. Повтор отсюда не стоит ни одного вызова ИИ. */
+async function showRecipeList(ctx: Context, userId: number, edit: boolean): Promise<void> {
+  const recipes = await listRecipes(userId, 8);
+  if (recipes.length === 0) {
+    const text =
+      "Сохранённых блюд пока нет.\n\n" +
+      "Пришлите фото еды, и под карточкой будет кнопка <b>💾 В мои блюда</b>. " +
+      "Потом такое же блюдо записывается одним тапом — без фото и мгновенно.";
+    if (edit) await ctx.editMessageText(text, { parse_mode: "HTML" }).catch(() => undefined);
+    else await ctx.reply(text, { parse_mode: "HTML" });
+    return;
+  }
+  const text = "🍲 <b>Мои блюда</b>\n\nВыберите — запишу в дневник без фото и распознавания.";
+  const markup = recipeListKeyboard(recipes);
+  if (edit) await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: markup }).catch(() => undefined);
+  else await ctx.reply(text, { parse_mode: "HTML", reply_markup: markup });
+}
+
+bot.command("food", async (ctx) => {
+  if (!ctx.from) return;
+  const user = await upsertUserFromTelegram(ctx.from);
+  await showRecipeList(ctx, user.id, false);
+});
+
+bot.callbackQuery("rcp:list", async (ctx) => {
+  if (!ctx.from) return;
+  await ctx.answerCallbackQuery();
+  const user = await upsertUserFromTelegram(ctx.from);
+  await showRecipeList(ctx, user.id, true);
+});
+
+bot.callbackQuery(/^rcp:p:(\d+)$/, async (ctx) => {
+  if (!ctx.from) return;
+  const user = await upsertUserFromTelegram(ctx.from);
+  const recipe = await getRecipeForUser(Number(ctx.match[1]), user.id);
+  if (!recipe) {
+    await ctx.answerCallbackQuery({ text: "Блюдо не найдено" });
+    return;
+  }
+  await ctx.answerCallbackQuery();
+  await ctx
+    .editMessageText(
+      `🍲 <b>${recipe.name}</b>\n\nПорция ${Math.round(recipe.portionGrams)} г · ${Math.round(recipe.kcal)} ккал ` +
+        `(Б ${Math.round(recipe.protein)} / Ж ${Math.round(recipe.fat)} / У ${Math.round(recipe.carbs)})\n\nСколько съели?`,
+      { parse_mode: "HTML", reply_markup: portionKeyboard(recipe.id) }
+    )
+    .catch(() => undefined);
+});
+
+bot.callbackQuery(/^rcp:u:(\d+):(\d+)$/, async (ctx) => {
+  if (!ctx.from || !ctx.chat) return;
+  const user = await upsertUserFromTelegram(ctx.from);
+  const recipe = await getRecipeForUser(Number(ctx.match[1]), user.id);
+  if (!recipe) {
+    await ctx.answerCallbackQuery({ text: "Блюдо не найдено" });
+    return;
+  }
+  const multiplier = Number(ctx.match[2]) / 10;
+  await ctx.answerCallbackQuery({ text: "Записываю…" });
+  // Лимит распознаваний не расходуется: вызова модели здесь нет, платить не за что
+  const meal = await logRecipe(recipe, multiplier);
+  const messageId = ctx.callbackQuery.message?.message_id;
+  if (messageId) await publishMealCard(ctx, user, meal, messageId);
 });
 
 bot.command("delete", async (ctx) => {

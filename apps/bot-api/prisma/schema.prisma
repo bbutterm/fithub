@@ -24,6 +24,7 @@ model User {
   subscriptions      Subscription[]
   usage              UsageCounter[]
   aiUsage            AiUsage[]
+  recipes            Recipe[]
 }
 
 // Учёт каждого вызова ИИ: токены и стоимость (для админки)
@@ -189,6 +190,31 @@ model Subscription {
 
   @@index([userId, status])
   @@index([status, expiresAt])
+}
+
+/// Сохранённое блюдо: состав и КБЖУ на одну порцию.
+///
+/// Смысл не в «избранном», а в деньгах и времени: повтор сохранённого блюда
+/// не требует ни одного вызова vision-модели, а люди едят одно и то же.
+model Recipe {
+  id           Int       @id @default(autoincrement())
+  userId       Int
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  portionGrams Float
+  kcal         Float
+  protein      Float
+  fat          Float
+  carbs        Float
+  /// Позиции как в MealItem — чтобы повтор давал такой же разбор, а не одну строку
+  items        Json
+  sourceMealId Int?
+  timesUsed    Int       @default(0)
+  lastUsedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@unique([userId, name])
+  @@index([userId, timesUsed])
 }
 
 model UsageCounter {
