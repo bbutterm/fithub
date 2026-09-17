@@ -475,7 +475,9 @@ export async function buildServer() {
       plan,
       expiresAt: sub?.expiresAt.toISOString() ?? null,
       prices: { month: config.STARS_PRICE_MONTH, year: config.STARS_PRICE_YEAR },
-      freeLimit: config.FREE_PHOTOS_PER_DAY,
+      // Персональный лимит из админки важнее общего — иначе человек с лимитом 10
+      // видит «использовано 4 из 3». Правка уже была в PR #19, её снёс откат dc4e14c.
+      freeLimit: user.dailyLimitOverride ?? config.FREE_PHOTOS_PER_DAY,
       usedToday: usage?.photoCount ?? 0
     };
   });
