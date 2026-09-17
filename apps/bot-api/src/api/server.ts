@@ -7,6 +7,7 @@ import { enableRls, prisma } from "../db.js";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { validateInitData } from "../auth/initData.js";
+import { signPhotoToken, verifyPhotoToken } from "../auth/photoToken.js";
 import { upsertUserFromTelegram } from "../services/users.js";
 import { calcNorms } from "../services/nutrition.js";
 import { addItemsToMeal, deleteItem, deleteMeal, getDay, getMealForUser, updateItemGrams } from "../services/meals.js";
@@ -61,6 +62,7 @@ function serializeProfile(p: NonNullable<Awaited<ReturnType<typeof prisma.profil
 
 function serializeMeal(m: {
   id: number;
+  userId?: number;
   photoThumbFileId?: string | null;
   eatenAt: Date;
   totalKcal: number;
@@ -84,6 +86,9 @@ function serializeMeal(m: {
     overallConfidence: m.overallConfidence,
     source: m.source,
     hasPhoto: Boolean(m.photoFileId),
+    // Подпись выдаётся вместе с приёмом: Mini App не собирает адрес картинки
+    // из сессионного токена, а просто подставляет её
+    photoToken: m.photoFileId && m.userId !== undefined ? signPhotoToken(m.id, m.userId) : null,
     items: m.items
   };
 }
@@ -215,14 +220,8 @@ export async function buildServer() {
 
   const authenticate = async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      if (!request.headers.authorization) {
-        // для <img>: токен можно передать query-параметром
-        const token = (request.query as { token?: string }).token;
-        if (token) {
-          request.user = app.jwt.verify<{ uid: number }>(token);
-          return;
-        }
-      }
+      // Только заголовок: единственным потребителем токена в query был фото-прокси,
+      // и у него теперь своя короткоживущая подпись
       await request.jwtVerify();
     } catch {
       await reply.code(401).send({ error: "unauthorized" });
@@ -410,10 +409,15 @@ export async function buildServer() {
 
   // --- Фото-прокси (S3 не используется: отдаём файл Telegram через backend) ---
   // ?thumb=1 — маленький размер для превью в ленте (в разы быстрее и дешевле по трафику)
-  app.get("/api/photos/:mealId", { preHandler: authenticate }, async (request, reply) => {
+  app.get("/api/photos/:mealId", async (request, reply) => {
     const mealId = Number((request.params as { mealId: string }).mealId);
-    const wantThumb = (request.query as { thumb?: string }).thumb === "1";
-    const meal = await getMealForUser(mealId, request.user.uid);
+    const q = request.query as { thumb?: string; t?: string };
+    const wantThumb = q.thumb === "1";
+    // Только подпись из signPhotoToken: сессионный JWT в адресе картинки уезжал
+    // в логи и кэш, давая на 12 часов доступ ко всему аккаунту
+    const uid = q.t ? verifyPhotoToken(q.t, mealId) : null;
+    if (uid === null) return reply.code(401).send({ error: "unauthorized" });
+    const meal = await getMealForUser(mealId, uid);
     if (!meal?.photoFileId) return reply.code(404).send({ error: "not_found" });
     const fileId = wantThumb && meal.photoThumbFileId ? meal.photoThumbFileId : meal.photoFileId;
     try {

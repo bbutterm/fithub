@@ -114,7 +114,7 @@ export function MealDetail({ mealId, onClose }: Props) {
             </div>
             {meal.hasPhoto && (
               <img
-                src={photoUrl(meal.id)}
+                src={photoUrl(meal)}
                 alt="Фото еды"
                 style={{ width: "100%", borderRadius: 12, maxHeight: 220, objectFit: "cover" }}
                 className="mb"

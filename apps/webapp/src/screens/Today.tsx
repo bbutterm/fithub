@@ -127,7 +127,7 @@ export function Today({ profile, initialMealId, userName }: Props) {
                 {m.hasPhoto ? (
                   <img
                     className="meal-thumb"
-                    src={photoUrl(m.id, true)}
+                    src={photoUrl(m, true)}
                     alt=""
                     loading="lazy"
                     onError={(e) => ((e.target as HTMLImageElement).outerHTML = '<div class="meal-thumb">🍽</div>')}

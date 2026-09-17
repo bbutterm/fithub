@@ -20,6 +20,8 @@ export interface Meal {
   overallConfidence: number | null;
   source: string;
   hasPhoto: boolean;
+  /** Короткоживущая подпись для /api/photos — не сессионный токен. */
+  photoToken: string | null;
   items: MealItem[];
 }
 

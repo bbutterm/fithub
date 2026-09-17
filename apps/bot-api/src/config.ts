@@ -92,6 +92,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     jwtSecret: c.JWT_SECRET || createHash("sha256").update(`${c.BOT_TOKEN}:jwt`).digest("hex"),
     // secret_token для проверки, что webhook-запросы приходят именно от Telegram
     webhookSecret: createHash("sha256").update(`${c.BOT_TOKEN}:webhook`).digest("hex"),
+    // Отдельный ключ для подписи ссылок на фото: утечка такой ссылки не должна
+    // давать ничего, кроме одной картинки
+    photoSecret: createHash("sha256").update(`${c.JWT_SECRET || c.BOT_TOKEN}:photo`).digest("hex"),
     adminTgIds: new Set(
       c.ADMIN_TG_IDS.split(",")
         .map((s) => s.trim())

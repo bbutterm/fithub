@@ -66,8 +66,9 @@ export async function authorize(): Promise<AuthResult> {
   return res;
 }
 
-export function photoUrl(mealId: number, thumb = false): string {
-  return `/api/photos/${mealId}?token=${encodeURIComponent(token ?? "")}${thumb ? "&thumb=1" : ""}`;
+/** Ссылка на фото приёма. Подпись приходит с самим приёмом и живёт час. */
+export function photoUrl(meal: { id: number; photoToken: string | null }, thumb = false): string {
+  return `/api/photos/${meal.id}?t=${encodeURIComponent(meal.photoToken ?? "")}${thumb ? "&thumb=1" : ""}`;
 }
 
 export const api = {
