@@ -19,6 +19,7 @@ import { registerBenchRoutes } from "./bench.js";
 import { downloadTelegramFile } from "../services/tgfiles.js";
 import { checkRecognitionLimit, incrementRecognitionCount } from "../services/limits.js";
 import { localDateStr } from "../utils/tz.js";
+import { DIET_PRESETS, normalizeDiets } from "../diets.js";
 import { PLAN_PAYLOADS } from "../bot/payments.js";
 import { bot } from "../bot/bot.js";
 
@@ -39,6 +40,10 @@ const profileBodySchema = z.object({
   dietType: z.enum(["none", "vegetarian", "vegan", "keto", "halal"]),
   allergies: z.array(z.string().trim().min(1)).max(30).default([]),
   dislikes: z.array(z.string().trim().min(1)).max(30).default([]),
+  // Идентификаторы сверяются со справочником, а не принимаются на веру: в промпт
+  // уходят правила из кода, и неизвестный идентификатор просто отбрасывается.
+  medicalDiets: z.array(z.string()).max(10).default([]).transform(normalizeDiets),
+  dietNotes: z.string().trim().max(500).nullable().default(null),
   adviceTone: z.enum(["strict", "friendly", "scientific"]).default("friendly"),
   adviceTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default("09:00"),
   adviceEnabled: z.boolean().default(true),
@@ -266,6 +271,12 @@ export async function buildServer() {
     };
   });
 
+  // Справочник режимов питания. Отдаётся с сервера, а не дублируется в Mini App:
+  // правила и список живут в одном месте — src/diets.ts.
+  app.get("/api/diets", async () => ({
+    diets: DIET_PRESETS.map(({ id, label, hint }) => ({ id, label, hint }))
+  }));
+
   app.put("/api/profile", { preHandler: authenticate }, async (request, reply) => {
     const parsed = profileBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "bad_request", details: parsed.error.flatten() });
@@ -296,6 +307,8 @@ export async function buildServer() {
       dietType: b.dietType,
       allergies: b.allergies,
       dislikes: b.dislikes,
+      medicalDiets: b.medicalDiets,
+      dietNotes: b.dietNotes,
       adviceTone: b.adviceTone,
       adviceTime: b.adviceTime,
       adviceEnabled: b.adviceEnabled,

@@ -12,6 +12,7 @@ import {
   type FoodRecognition
 } from "../ai/food.js";
 import { createMealFromRecognition, deleteMeal, getDay, replaceMealItems } from "../services/meals.js";
+import { applyDietCheck } from "../services/diet.js";
 import { checkBurstLimit, checkRecognitionLimit, incrementRecognitionCount } from "../services/limits.js";
 import { acquireRecognitionLock, releaseRecognitionLock } from "../services/locks.js";
 import { calcStreak, getDailyStats } from "../services/stats.js";
@@ -70,16 +71,26 @@ function timeKeyboard(mealId: number): InlineKeyboard {
 }
 
 /** Перерисовать карточку приёма (после смены времени/состава). */
-async function redrawMealCard(ctx: Context, userId: number, mealId: number, messageId: number): Promise<void> {
+async function redrawMealCard(
+  ctx: Context,
+  userId: number,
+  mealId: number,
+  messageId: number,
+  // Состав изменился — отметку о диете надо пересчитать, иначе она останется
+  // от прошлых блюд. При смене только времени приёма пересчитывать незачем:
+  // это лишний платный вызов с тем же результатом.
+  opts: { recheckDiet?: boolean } = {}
+): Promise<void> {
   if (!ctx.chat) return;
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-  const meal = await prisma.meal.findFirst({ where: { id: mealId, userId }, include: { items: true } });
-  if (!meal) return;
+  const found = await prisma.meal.findFirst({ where: { id: mealId, userId }, include: { items: true } });
+  if (!found) return;
   const [profile, day, weekStats] = await Promise.all([
     prisma.profile.findUnique({ where: { userId } }),
     getDay(userId, localDateStr(user.tz), user.tz),
     getDailyStats(userId, user.tz, 14)
   ]);
+  const meal = opts.recheckDiet ? await applyDietCheck(found, profile) : found;
   await ctx.api
     .editMessageText(
       ctx.chat.id,
@@ -162,11 +173,12 @@ async function handleRecognition(params: {
       getDay(user.id, localDateStr(user.tz), user.tz),
       getDailyStats(user.id, user.tz, 14)
     ]);
+    const checked = await applyDietCheck(meal, profile);
     await ctx.api.editMessageText(
       ctx.chat.id,
       status.message_id,
       formatMealCard({
-        meal,
+        meal: checked,
         dayKcal: day.totals.totalKcal,
         targetKcal: profile?.targetKcal ?? null,
         streak: calcStreak(weekStats),
@@ -214,7 +226,7 @@ async function handleCorrection(ctx: Context, userId: number, mealTgMessageId: n
       await prisma.meal.update({ where: { id: meal.id }, data: { eatenAt: eatenTimeToUtc(recognition.eaten_time, user.tz) } });
     }
     // Обновляем исходную карточку и убираем статус
-    await redrawMealCard(ctx, userId, meal.id, mealTgMessageId);
+    await redrawMealCard(ctx, userId, meal.id, mealTgMessageId, { recheckDiet: recognition.items.length > 0 });
     await ctx.api.editMessageText(ctx.chat.id, status.message_id, "Обновил ✅ Карточка выше пересчитана.");
   } catch (err) {
     const message =
@@ -448,10 +460,10 @@ async function handleContextualText(
       }
       if (lastMeal.tgMessageId) {
         // Обновляем исходную карточку, статус — короткое подтверждение
-        await redrawMealCard(ctx, user.id, lastMeal.id, Number(lastMeal.tgMessageId));
+        await redrawMealCard(ctx, user.id, lastMeal.id, Number(lastMeal.tgMessageId), { recheckDiet: res.items.length > 0 });
         await ctx.api.editMessageText(ctx.chat.id, status.message_id, "Обновил ✅ Карточка выше пересчитана.");
       } else {
-        await redrawMealCard(ctx, user.id, lastMeal.id, status.message_id);
+        await redrawMealCard(ctx, user.id, lastMeal.id, status.message_id, { recheckDiet: res.items.length > 0 });
       }
       return;
     }

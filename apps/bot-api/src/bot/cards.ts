@@ -2,6 +2,9 @@ import type { Meal, MealItem } from "@prisma/client";
 
 const r0 = (v: number) => Math.round(v);
 
+/** Отметка о режиме питания. Зелёная галочка — тоже сигнал: человек видит, что проверка была. */
+const DIET_ICONS: Record<string, string> = { ok: "✅", caution: "⚠️", avoid: "🚫" };
+
 export function progressBar(current: number, target: number, width = 8): string {
   if (target <= 0) return "";
   const filled = Math.min(width, Math.round((current / target) * width));
@@ -38,6 +41,10 @@ export function formatMealCard(params: {
   if (meal.overallConfidence !== null && meal.overallConfidence < 0.6) {
     lines.push("");
     lines.push("⚠️ Не уверен в оценке — ответь на это сообщение уточнением («это была индейка, 200 г») и я пересчитаю.");
+  }
+  if (meal.dietNote) {
+    lines.push("");
+    lines.push(`${DIET_ICONS[meal.dietVerdict ?? "caution"] ?? "•"} ${meal.dietNote}`);
   }
   if (meal.aiComment) {
     lines.push("");

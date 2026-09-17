@@ -5,6 +5,7 @@ import type {
   AdminUser,
   AnalyticsResponse,
   DayResponse,
+  DietPreset,
   Meal,
   MeResponse,
   Profile,
@@ -71,6 +72,7 @@ export function photoUrl(mealId: number, thumb = false): string {
 
 export const api = {
   me: () => request<MeResponse>("/api/me"),
+  diets: () => request<{ diets: DietPreset[] }>("/api/diets"),
   saveProfile: (profile: Partial<Profile> & { tz?: string }) =>
     request<{ profile: Profile; computedNorms: { targetKcal: number; targetProtein: number; targetFat: number; targetCarbs: number } }>(
       "/api/profile",

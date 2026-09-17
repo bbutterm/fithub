@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { Profile } from "../types";
+import type { DietPreset, Profile } from "../types";
 import { parseNum } from "./Onboarding";
 
 interface Props {
@@ -29,6 +29,18 @@ export function Settings({ profile, onSaved }: Props) {
     targetCarbs: profile.targetCarbs?.toString() ?? ""
   });
   const [manualTargets, setManualTargets] = useState(false);
+  // Справочник режимов приходит с сервера — правила и список живут в одном месте.
+  // Пока он не загрузился, блок просто не показывается: уже выбранные режимы
+  // сохранятся в профиле как есть, потерять их нельзя.
+  const [dietPresets, setDietPresets] = useState<DietPreset[]>([]);
+  useEffect(() => {
+    api.diets().then((r) => setDietPresets(r.diets)).catch(() => undefined);
+  }, []);
+
+  function toggleDiet(id: string) {
+    upd("medicalDiets", p.medicalDiets.includes(id) ? p.medicalDiets.filter((d) => d !== id) : [...p.medicalDiets, id]);
+  }
+
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
@@ -148,6 +160,45 @@ export function Settings({ profile, onSaved }: Props) {
           <input type="text" value={p.dislikes.join(", ")} onChange={(e) => upd("dislikes", e.target.value.split(",").map((s) => s.trim()).filter(Boolean))} />
         </label>
       </div>
+
+      {dietPresets.length > 0 && (
+        <div className="card">
+          <h2>Лечебный режим</h2>
+          <p className="hint small mb">
+            Если врач назначил диету — включи её, и бот будет отмечать в карточке, вписывается ли еда в режим.
+            Можно выбрать несколько.
+          </p>
+          <div className="row wrap mb">
+            {dietPresets.map((d) => (
+              <button
+                key={d.id}
+                className={`chip ${p.medicalDiets.includes(d.id) ? "active" : ""}`}
+                onClick={() => toggleDiet(d.id)}
+                title={d.hint}
+              >
+                {d.label}
+              </button>
+            ))}
+          </div>
+          {p.medicalDiets.length > 0 && (
+            <p className="hint small mb">
+              {dietPresets.filter((d) => p.medicalDiets.includes(d.id)).map((d) => `${d.label} — ${d.hint}`).join("; ")}
+            </p>
+          )}
+          <label className="field">
+            <span>Свои ограничения — что ещё нельзя или нужно ограничить</span>
+            <input
+              type="text"
+              placeholder="например: без острого, не больше 2 чашек кофе"
+              value={p.dietNotes ?? ""}
+              onChange={(e) => upd("dietNotes", e.target.value || null)}
+            />
+          </label>
+          <p className="hint small">
+            Это не медицинская рекомендация: бот сверяет еду с тем, что ты указал здесь, и не заменяет врача.
+          </p>
+        </div>
+      )}
 
       <div className="card">
         <h2>Советы нутрициолога</h2>

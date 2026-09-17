@@ -39,6 +39,8 @@ export interface Profile {
   dietType: "none" | "vegetarian" | "vegan" | "keto" | "halal";
   allergies: string[];
   dislikes: string[];
+  medicalDiets: string[];
+  dietNotes: string | null;
   targetKcal: number | null;
   targetProtein: number | null;
   targetFat: number | null;
@@ -110,4 +112,11 @@ export interface SubscriptionResponse {
   prices: { month: number; year: number };
   freeLimit: number;
   usedToday: number;
+}
+
+/** Режим питания из справочника сервера (GET /api/diets). */
+export interface DietPreset {
+  id: string;
+  label: string;
+  hint: string;
 }

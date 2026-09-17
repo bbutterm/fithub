@@ -87,6 +87,12 @@ model Profile {
   dietType      DietType      @default(none)
   allergies     String[]      @default([])
   dislikes      String[]      @default([])
+  // Лечебные и лечебно-профилактические режимы питания (идентификаторы из src/diets.ts).
+  // Массив, а не enum: режимы сочетаются — «стол №5» и «средиземноморская» вместе
+  // это обычное назначение, а не противоречие.
+  medicalDiets  String[]      @default([])
+  // Ограничения своими словами: то, что не покрыто ни одним готовым режимом.
+  dietNotes     String?
   targetKcal    Int?
   targetProtein Int?
   targetFat     Int?
@@ -117,6 +123,10 @@ model Meal {
   totalFat          Float      @default(0)
   totalCarbs        Float      @default(0)
   aiComment         String?
+  // Отметка о соответствии режиму питания на момент записи. Хранится, чтобы
+  // карточка не теряла её при перерисовке после уточнения блюда.
+  dietNote          String?
+  dietVerdict       String? // ok | caution | avoid
   overallConfidence Float?
   source            MealSource
   items             MealItem[]

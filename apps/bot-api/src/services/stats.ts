@@ -1,6 +1,7 @@
 import type { Profile } from "@prisma/client";
 import { prisma } from "../db.js";
 import { addDays, localDateStr, zonedDayRangeUtc } from "../utils/tz.js";
+import { getDietPreset, normalizeDiets } from "../diets.js";
 
 export interface DayStat {
   date: string;
@@ -90,13 +91,23 @@ export function detectPatterns(stats: DayStat[]): WeekPatterns {
   return { daysLogged, skippedBreakfasts, lateDinnerDays, emptyDays, repeatedDishes };
 }
 
+function medicalDietsLine(ids: string[]): string | null {
+  const labels = normalizeDiets(ids).map((id) => getDietPreset(id)!.label);
+  if (labels.length === 0) return null;
+  return `Режим питания (соблюдать строго, советы не должны ему противоречить): ${labels.join(", ")}`;
+}
+
 export function formatProfileBlock(p: Profile): string {
   const lines = [
     `Цель: ${{ lose: "похудение", maintain: "поддержание", gain: "набор массы" }[p.goal]}`,
     `Диета: ${{ none: "обычная", vegetarian: "вегетарианская", vegan: "веганская", keto: "кето", halal: "халяль" }[p.dietType]}`,
     p.targetKcal ? `Цель по калориям: ${p.targetKcal} ккал (Б ${p.targetProtein ?? "?"} / Ж ${p.targetFat ?? "?"} / У ${p.targetCarbs ?? "?"})` : null,
     p.allergies.length ? `Аллергии: ${p.allergies.join(", ")}` : null,
-    p.dislikes.length ? `Не любит: ${p.dislikes.join(", ")}` : null
+    p.dislikes.length ? `Не любит: ${p.dislikes.join(", ")}` : null,
+    // Лечебный режим важнее остального: совет, противоречащий назначению врача,
+    // хуже, чем отсутствие совета. Поэтому он идёт последним и с пометкой.
+    medicalDietsLine(p.medicalDiets),
+    p.dietNotes?.trim() ? `Дополнительные ограничения: ${p.dietNotes.trim()}` : null
   ];
   return lines.filter(Boolean).join("\n");
 }
