@@ -13,7 +13,7 @@ import {
 } from "../ai/food.js";
 import { createMealFromRecognition, deleteMeal, getDay, replaceMealItems } from "../services/meals.js";
 import { applyDietCheck } from "../services/diet.js";
-import { checkBurstLimit, checkRecognitionLimit, incrementRecognitionCount } from "../services/limits.js";
+import { checkBurstLimit, checkRecognitionLimit, refundRecognition, tryConsumeRecognition } from "../services/limits.js";
 import { acquireRecognitionLock, releaseRecognitionLock } from "../services/locks.js";
 import { calcStreak, getDailyStats } from "../services/stats.js";
 import { upsertUserFromTelegram } from "../services/users.js";
@@ -138,7 +138,9 @@ async function handleRecognition(params: {
     return;
   }
 
-  const limit = await checkRecognitionLimit(user);
+  // Занимаем попытку одним запросом: проверка и списание неразделимы, иначе два
+  // сообщения подряд проходят оба. Если дальше сорвётся — вернём через refund.
+  const limit = await tryConsumeRecognition(user);
   if (!limit.allowed) {
     await ctx.reply(limitReachedText(limit.limit ?? config.FREE_PHOTOS_PER_DAY), {
       parse_mode: "HTML",
@@ -148,6 +150,7 @@ async function handleRecognition(params: {
   }
 
   if (!(await acquireRecognitionLock(user.id))) {
+    await refundRecognition(user);
     await ctx.reply("Я ещё разбираю предыдущую еду — секунду 🙏");
     return;
   }
@@ -160,7 +163,6 @@ async function handleRecognition(params: {
       params.recognize(user.id),
       new Promise<never>((_, reject) => setTimeout(() => reject(new RecognitionTimeoutError()), 45_000))
     ]);
-    await incrementRecognitionCount(user);
     const meal = await createMealFromRecognition({
       userId: user.id,
       recognition,
@@ -198,6 +200,8 @@ async function handleRecognition(params: {
           ? "Слишком долго думаю над этим фото 😅 Пришли его ещё раз — обычно со второго раза быстрее."
           : "Не получилось распознать 😔 Попробуй ещё раз через минуту.";
     if (!(err instanceof NoFoodError)) logger.error({ err: String(err), userId: user.id }, "recognition failed");
+    // Еда не распознана или провайдер не ответил — попытка не должна сгорать
+    await refundRecognition(user);
     await ctx.api.editMessageText(ctx.chat.id, status.message_id, message).catch(() => undefined);
   } finally {
     await releaseRecognitionLock(user.id);
@@ -469,7 +473,7 @@ async function handleContextualText(
     }
 
     if (res.action === "new_meal" && res.items.length > 0) {
-      const limit = await checkRecognitionLimit(user);
+      const limit = await tryConsumeRecognition(user);
       if (!limit.allowed) {
         await ctx.api.editMessageText(
           ctx.chat.id,
@@ -479,7 +483,6 @@ async function handleContextualText(
         );
         return;
       }
-      await incrementRecognitionCount(user);
       const meal = await createMealFromRecognition({
         userId: user.id,
         recognition: res,

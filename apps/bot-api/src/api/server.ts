@@ -17,7 +17,7 @@ import { probeProvidersOnce } from "../lib/ai.js";
 import { isAdminTgId, registerAdminRoutes } from "./admin.js";
 import { registerBenchRoutes } from "./bench.js";
 import { downloadTelegramFile } from "../services/tgfiles.js";
-import { checkRecognitionLimit, incrementRecognitionCount } from "../services/limits.js";
+import { refundRecognition, tryConsumeRecognition } from "../services/limits.js";
 import { localDateStr } from "../utils/tz.js";
 import { DIET_PRESETS, normalizeDiets } from "../diets.js";
 import { PLAN_PAYLOADS } from "../bot/payments.js";
@@ -388,14 +388,15 @@ export async function buildServer() {
     const meal = await getMealForUser(Number(params.mealId), uid);
     if (!meal) return reply.code(404).send({ error: "not_found" });
 
-    const limit = await checkRecognitionLimit(user);
+    // Занимаем попытку атомарно до вызова модели; если не вышло — возвращаем
+    const limit = await tryConsumeRecognition(user);
     if (!limit.allowed) return reply.code(402).send({ error: "limit_reached", limit: limit.limit });
     try {
       const recognition = await recognizeFoodText(body.data.text, uid);
-      await incrementRecognitionCount(user);
       const updated = await addItemsToMeal(meal.id, recognition);
       return { meal: serializeMeal(updated) };
     } catch (err) {
+      await refundRecognition(user);
       if (err instanceof NoFoodError) return reply.code(422).send({ error: "no_food" });
       throw err;
     }
