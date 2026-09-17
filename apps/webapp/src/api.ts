@@ -74,6 +74,9 @@ export function photoUrl(meal: { id: number; photoToken: string | null }, thumb 
 export const api = {
   me: () => request<MeResponse>("/api/me"),
   diets: () => request<{ diets: DietPreset[] }>("/api/diets"),
+  accountSummary: () =>
+    request<{ meals: number; advices: number; hasProfile: boolean; createdAt: string }>("/api/me/summary"),
+  deleteAccount: () => request<{ ok: true }>("/api/me", { method: "DELETE" }),
   saveProfile: (profile: Partial<Profile> & { tz?: string }) =>
     request<{ profile: Profile; computedNorms: { targetKcal: number; targetProtein: number; targetFat: number; targetCarbs: number } }>(
       "/api/profile",

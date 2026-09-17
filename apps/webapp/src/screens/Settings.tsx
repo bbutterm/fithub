@@ -37,6 +37,36 @@ export function Settings({ profile, onSaved }: Props) {
     api.diets().then((r) => setDietPresets(r.diets)).catch(() => undefined);
   }, []);
 
+  // Удаление аккаунта в два шага: первый тап раскрывает подтверждение с числами,
+  // второй — удаляет. Одной кнопки для необратимого действия мало.
+  const [deleteStep, setDeleteStep] = useState<"idle" | "confirm" | "deleting">("idle");
+  const [summary, setSummary] = useState<{ meals: number; advices: number } | null>(null);
+
+  async function askDelete() {
+    setDeleteStep("confirm");
+    try {
+      setSummary(await api.accountSummary());
+    } catch {
+      setSummary(null);
+    }
+  }
+
+  async function confirmDelete() {
+    setDeleteStep("deleting");
+    try {
+      await api.deleteAccount();
+      // Аккаунта больше нет: любой следующий запрос вернёт ошибку, поэтому
+      // показываем финальный экран, а не возвращаемся в настройки
+      document.body.innerHTML =
+        '<div style="padding:40px 20px;text-align:center;font:16px system-ui;color:#888">' +
+        "Аккаунт и все записи удалены.<br>Закройте приложение." +
+        "</div>";
+    } catch {
+      setError("Не получилось удалить. Попробуйте ещё раз или напишите боту /delete.");
+      setDeleteStep("idle");
+    }
+  }
+
   function toggleDiet(id: string) {
     upd("medicalDiets", p.medicalDiets.includes(id) ? p.medicalDiets.filter((d) => d !== id) : [...p.medicalDiets, id]);
   }
@@ -255,6 +285,34 @@ export function Settings({ profile, onSaved }: Props) {
       <button className="btn" disabled={saving} onClick={() => void save()}>
         {saving ? "Сохраняю…" : saved ? "Сохранено ✓" : "Сохранить"}
       </button>
-    </div>
+    
+      <div className="card">
+        <h2>Удаление аккаунта</h2>
+        {deleteStep === "idle" ? (
+          <>
+            <p className="hint small mb">
+              Удалит профиль, все записи о еде, советы и отчёты. Отменить будет нельзя.
+            </p>
+            <button className="secondary" onClick={() => void askDelete()}>
+              Удалить аккаунт
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="hint small mb">
+              {summary
+                ? `Будет удалено: записей о еде — ${summary.meals}, советов и отчётов — ${summary.advices}, и профиль целиком.`
+                : "Будет удалено всё: профиль, записи о еде, советы и отчёты."}
+            </p>
+            <div className="row wrap">
+              <button onClick={() => setDeleteStep("idle")}>Отмена</button>
+              <button className="secondary" disabled={deleteStep === "deleting"} onClick={() => void confirmDelete()}>
+                {deleteStep === "deleting" ? "Удаляю…" : "Да, удалить навсегда"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+</div>
   );
 }

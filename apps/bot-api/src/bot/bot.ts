@@ -17,7 +17,7 @@ import { applyDietCheck } from "../services/diet.js";
 import { checkBurstLimit, checkRecognitionLimit, refundRecognition, tryConsumeRecognition } from "../services/limits.js";
 import { acquireRecognitionLock, releaseRecognitionLock } from "../services/locks.js";
 import { calcStreak, getDailyStats } from "../services/stats.js";
-import { upsertUserFromTelegram } from "../services/users.js";
+import { deleteAccount, summarizeAccount, upsertUserFromTelegram } from "../services/users.js";
 import { addDays, localDateStr, zonedTimeToUtc } from "../utils/tz.js";
 import { formatDaySummary, formatMealCard } from "./cards.js";
 import { checkRateLimit } from "./queue.js";
@@ -155,6 +155,7 @@ const START_TEXT = [
   "Команды:",
   "/day — сводка за сегодня",
   "/settings — настройки",
+  "/delete — удалить аккаунт и все записи",
   "",
   "Начни с короткого онбординга в приложении, чтобы я рассчитал твои нормы 👇"
 ].join("\n");
@@ -292,6 +293,46 @@ bot.command("settings", async (ctx) => {
   await ctx.reply("Настройки профиля, целей и советов — в приложении:", {
     reply_markup: new InlineKeyboard().webApp("⚙️ Открыть настройки", `${config.WEBAPP_URL}?screen=settings`)
   });
+});
+
+bot.command("delete", async (ctx) => {
+  if (!ctx.from) return;
+  const user = await upsertUserFromTelegram(ctx.from);
+  const summary = await summarizeAccount(user.id);
+  if (!summary) return;
+  const lines = [
+    "🗑 <b>Удаление аккаунта</b>",
+    "",
+    "Будут удалены безвозвратно:",
+    `• записей о еде: <b>${summary.meals}</b>`,
+    `• советов и отчётов: <b>${summary.advices}</b>`,
+    summary.hasProfile ? "• профиль: пол, возраст, рост, вес, цели, аллергии, режим питания" : null,
+    "",
+    "Отменить это будет нельзя. Экспорта пока нет — если данные нужны, сначала сохраните их из дневника."
+  ].filter(Boolean) as string[];
+  await ctx.reply(lines.join("\n"), {
+    parse_mode: "HTML",
+    reply_markup: new InlineKeyboard()
+      .text("Удалить всё", "acct:del:yes")
+      .row()
+      .text("Отмена", "acct:del:no")
+  });
+});
+
+bot.callbackQuery("acct:del:no", async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Отменено" });
+  await ctx.editMessageText("Ничего не удалил — всё на месте 🙂").catch(() => undefined);
+});
+
+bot.callbackQuery("acct:del:yes", async (ctx) => {
+  if (!ctx.from) return;
+  const user = await upsertUserFromTelegram(ctx.from);
+  await deleteAccount(user.id);
+  logger.info({ userId: user.id }, "account deleted by user");
+  await ctx.answerCallbackQuery({ text: "Удалено" });
+  await ctx.editMessageText(
+    "Аккаунт и все записи удалены. Если захотите начать заново — просто пришлите мне фото еды."
+  ).catch(() => undefined);
 });
 
 bot.callbackQuery(/^meal:time:(\d+)$/, async (ctx) => {

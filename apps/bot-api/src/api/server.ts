@@ -8,7 +8,7 @@ import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { validateInitData } from "../auth/initData.js";
 import { signPhotoToken, verifyPhotoToken } from "../auth/photoToken.js";
-import { upsertUserFromTelegram } from "../services/users.js";
+import { deleteAccount, summarizeAccount, upsertUserFromTelegram } from "../services/users.js";
 import { calcNorms } from "../services/nutrition.js";
 import { addItemsToMeal, deleteItem, deleteMeal, getDay, getMealForUser, updateItemGrams } from "../services/meals.js";
 import { calcStreak, getDailyStats } from "../services/stats.js";
@@ -268,6 +268,21 @@ export async function buildServer() {
       subscriptionExpiresAt: sub?.expiresAt.toISOString() ?? null,
       isAdmin: isAdminTgId(user.tgUserId)
     };
+  });
+
+  // Сводка перед удалением: что именно исчезнет
+  app.get("/api/me/summary", { preHandler: authenticate }, async (request, reply) => {
+    const summary = await summarizeAccount(request.user.uid);
+    if (!summary) return reply.code(404).send({ error: "not_found" });
+    return { ...summary, createdAt: summary.createdAt.toISOString() };
+  });
+
+  // Удаление аккаунта по требованию пользователя. Подтверждение — на стороне
+  // клиента: здесь только необратимое действие.
+  app.delete("/api/me", { preHandler: authenticate }, async (request) => {
+    await deleteAccount(request.user.uid);
+    logger.info({ userId: request.user.uid }, "account deleted by user");
+    return { ok: true };
   });
 
   // Справочник режимов питания. Отдаётся с сервера, а не дублируется в Mini App:
