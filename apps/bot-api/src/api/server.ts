@@ -223,8 +223,10 @@ export async function buildServer() {
   app.get("/api/cron/hourly", { preHandler: cronAuth }, async () => {
     const { runDailyAdviceTick } = await import("../cron/dailyAdvice.js");
     const { runChallengeSummaryTick } = await import("../cron/challengeSummary.js");
-    await runDailyAdviceTick();
-    await runChallengeSummaryTick();
+    // Бюджеты заданы явно: у функции Vercel 60 секунд на всё, а тиков здесь два.
+    // Своими значениями по умолчанию (45 + 20) они бы вместе не уложились.
+    await runDailyAdviceTick(new Date(), 30_000);
+    await runChallengeSummaryTick(new Date(), 20_000);
     return { ok: true };
   });
   app.get("/api/cron/monthly", { preHandler: cronAuth }, async () => {
