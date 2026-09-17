@@ -72,25 +72,58 @@ export function registerAdminRoutes(app: FastifyInstance, authenticate: (r: Fast
     };
   });
 
-  // Рассылка всем пользователям (анонсы для тестеров). Максимум 500 получателей за вызов.
+  // Рассылка пользователям. Идёт пачками с курсором: при 500 получателях
+  // последовательная отправка с паузой занимала минуты и не укладывалась
+  // в maxDuration 60 — функцию убивало посередине, часть получала сообщение,
+  // а админ не узнавал ни сколько ушло, ни с кого продолжать.
+  //
+  // Теперь за вызов уходит столько, сколько успевает за 45 секунд, а в ответе
+  // приходит nextAfterId: передайте его следующим запросом, чтобы продолжить.
   app.post("/api/admin/broadcast", { preHandler: requireAdmin }, async (request, reply) => {
-    const body = z.object({ text: z.string().trim().min(3).max(3000) }).safeParse(request.body);
+    const body = z
+      .object({ text: z.string().trim().min(3).max(3000), afterId: z.number().int().positive().optional() })
+      .safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
     const { bot } = await import("../bot/bot.js");
-    const users = await prisma.user.findMany({ select: { tgUserId: true }, take: 500, orderBy: { id: "asc" } });
+
+    const BATCH = 20;
+    const BUDGET_MS = 45_000;
+    const deadline = Date.now() + BUDGET_MS;
+    let cursor = body.data.afterId ?? 0;
     let sent = 0;
     let failed = 0;
-    for (const u of users) {
-      try {
-        await bot.api.sendMessage(Number(u.tgUserId), body.data.text);
-        sent++;
-      } catch {
-        failed++; // заблокировал бота / удалился — пропускаем
+    let nextAfterId: number | null = null;
+
+    for (;;) {
+      const users: Array<{ id: number; tgUserId: bigint }> = await prisma.user.findMany({
+        select: { id: true, tgUserId: true },
+        where: { id: { gt: cursor } },
+        orderBy: { id: "asc" },
+        take: BATCH
+      });
+      if (users.length === 0) break;
+
+      const results = await Promise.all(
+        users.map((u) =>
+          bot.api
+            .sendMessage(Number(u.tgUserId), body.data.text)
+            .then(() => true)
+            .catch(() => false) // заблокировал бота / удалился — пропускаем
+        )
+      );
+      sent += results.filter(Boolean).length;
+      failed += results.filter((ok) => !ok).length;
+      cursor = users[users.length - 1]?.id ?? cursor;
+
+      if (users.length < BATCH) break;
+      if (Date.now() > deadline) {
+        nextAfterId = cursor;
+        break;
       }
-      await new Promise((r) => setTimeout(r, 40)); // бережём rate limit Telegram
     }
-    logger.info({ adminUid: request.user.uid, sent, failed }, "admin broadcast");
-    return { ok: true, sent, failed };
+
+    logger.info({ adminUid: request.user.uid, sent, failed, nextAfterId }, "admin broadcast");
+    return { ok: true, sent, failed, nextAfterId };
   });
 
   // Список пользователей с агрегатами расходов и активности

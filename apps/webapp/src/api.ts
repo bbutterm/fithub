@@ -108,7 +108,10 @@ export const api = {
     setLimit: (userId: number, limit: number | null) =>
       request<{ ok: boolean }>(`/api/admin/users/${userId}/limit`, { method: "POST", body: JSON.stringify({ limit }) }),
     userUsage: (userId: number) => request<{ usdRubRate: number; usage: AdminUsageRow[] }>(`/api/admin/users/${userId}/usage`),
-    broadcast: (text: string) =>
-      request<{ ok: boolean; sent: number; failed: number }>("/api/admin/broadcast", { method: "POST", body: JSON.stringify({ text }) })
+    broadcast: (text: string, afterId?: number) =>
+      request<{ ok: boolean; sent: number; failed: number; nextAfterId: number | null }>("/api/admin/broadcast", {
+        method: "POST",
+        body: JSON.stringify({ text, afterId })
+      })
   }
 };

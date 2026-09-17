@@ -130,7 +130,10 @@ export async function buildServer() {
   // Probe ИИ-провайдеров: не блокирует старт, но подсказывает в логе про устаревшие модели
   probeProvidersOnce();
 
-  await app.register(cors, { origin: true });
+  // Ровно один источник вместо «любой»: авторизация идёт по Bearer, куки не
+  // используются, так что риск был невысоким — но и держать открытым незачем.
+  // Локальная разработка (vite на 5173) ходит через свой прокси на тот же origin.
+  await app.register(cors, { origin: [config.WEBAPP_URL], credentials: false });
   await app.register(jwt, { secret: config.jwtSecret, sign: { expiresIn: "12h" } });
 
   app.get("/health", async () => {

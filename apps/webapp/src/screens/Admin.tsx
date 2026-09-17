@@ -252,8 +252,21 @@ function BroadcastTab({ usersCount }: { usersCount: number }) {
     setSending(true);
     setResult("");
     try {
-      const r = await api.admin.broadcast(text.trim());
-      setResult(`✅ Доставлено: ${r.sent}${r.failed ? `, не дошло: ${r.failed} (заблокировали бота)` : ""}`);
+      // Сервер отправляет столько, сколько успевает за отведённое время, и
+      // возвращает курсор. Продолжаем сами, пока курсора нет — админ видит
+      // один результат, а не «отправлено 20 из 500, жмите ещё».
+      let sent = 0;
+      let failed = 0;
+      let afterId: number | undefined;
+      for (let pass = 0; pass < 50; pass++) {
+        const r = await api.admin.broadcast(text.trim(), afterId);
+        sent += r.sent;
+        failed += r.failed;
+        setResult(`Отправляю… доставлено ${sent}`);
+        if (r.nextAfterId === null) break;
+        afterId = r.nextAfterId;
+      }
+      setResult(`✅ Доставлено: ${sent}${failed ? `, не дошло: ${failed} (заблокировали бота)` : ""}`);
       setText("");
       haptic("success");
     } catch {
