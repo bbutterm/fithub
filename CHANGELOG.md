@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Follow-up review fix
+
+- Guarded challenge eligibility responses against rapid selection changes, cancellation and unmount; stale success/error responses cannot change the new selection.
+
 ### UX/UI audit, macro rings and purchase pause
 
 - Restored individual protein/fat/carbohydrate progress rings with targets; simplified calorie hierarchy.

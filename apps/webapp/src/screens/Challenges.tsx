@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { ChallengesResponse, Feasibility } from "../types";
 import { haptic } from "../telegram";
@@ -20,6 +20,14 @@ export function Challenges() {
   const [check, setCheck] = useState<Feasibility | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const selectionRequest = useRef(0);
+  useEffect(() => () => { selectionRequest.current++; }, []);
+
+  function cancelPick() {
+    selectionRequest.current++;
+    setPicked(null);
+    setCheck(null);
+  }
 
   function reload(fresh = true) {
     load<ChallengesResponse>("challenges", fresh)
@@ -29,12 +37,15 @@ export function Challenges() {
   useEffect(() => reload(!peek("challenges")), []);
 
   async function pick(templateId: string) {
+    const request = ++selectionRequest.current;
     setError("");
     setPicked(templateId);
     setCheck(null);
     try {
-      setCheck(await api.challengeFeasibility(templateId));
+      const result = await api.challengeFeasibility(templateId);
+      if (request === selectionRequest.current) setCheck(result);
     } catch {
+      if (request !== selectionRequest.current) return;
       setError("Не удалось проверить историю. Попробуй выбрать челлендж снова.");
       setPicked(null);
       setCheck(null);
@@ -47,8 +58,7 @@ export function Challenges() {
     try {
       await api.startChallenge(templateId, value);
       haptic("success");
-      setPicked(null);
-      setCheck(null);
+      cancelPick();
       reload();
     } catch {
       haptic("error");
@@ -200,7 +210,7 @@ export function Challenges() {
                         </button>
                       </>
                     )}
-                    <button className="chip" onClick={() => setPicked(null)}>
+                    <button className="chip" onClick={cancelPick}>
                       Отмена
                     </button>
                   </div>
