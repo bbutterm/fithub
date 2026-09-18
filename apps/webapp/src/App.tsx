@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { authorize } from "./api";
-import { getStartParam } from "./telegram";
+import { ApiError, authorize } from "./api";
+import { getRawInitData, getStartParam } from "./telegram";
 import type { Profile } from "./types";
 import { Onboarding } from "./screens/Onboarding";
 import { Today } from "./screens/Today";
@@ -33,6 +33,10 @@ export default function App() {
   const [plan, setPlan] = useState<"free" | "pro">("free");
   const [isAdmin, setIsAdmin] = useState(false);
   const [userName, setUserName] = useState<string | null>(null);
+  // Причина отказа во входе. Раньше экран говорил только «не удалось», и понять,
+  // что именно сломалось — пустой initData, отказ сервера или сеть, — было
+  // нельзя ни пользователю, ни по логам.
+  const [errorDetail, setErrorDetail] = useState("");
   const [route] = useState(initialRoute);
   const [tab, setTab] = useState<Tab>(route.tab);
 
@@ -50,7 +54,15 @@ export default function App() {
         setPlan(auth.plan);
         setIsAdmin(auth.isAdmin);
         setState("ready");
-      } catch {
+      } catch (err) {
+        const raw = getRawInitData();
+        setErrorDetail(
+          !raw
+            ? "Telegram не передал данные входа. Так бывает, если открыть ссылку в обычном браузере."
+            : err instanceof ApiError
+              ? `Сервер ответил ${err.status} (${err.code}).`
+              : `Не дозвонились до сервера: ${String(err).slice(0, 120)}`
+        );
         setState("error");
       }
     })();
@@ -69,7 +81,11 @@ export default function App() {
       <div className="screen center">
         <div className="card" style={{ marginTop: 60 }}>
           <h2>Не удалось авторизоваться</h2>
-          <p className="hint">Откройте приложение из Telegram — кнопкой у бота.</p>
+          <p className="hint mb">Откройте приложение из Telegram — кнопкой у бота.</p>
+          {errorDetail && <p className="hint small">{errorDetail}</p>}
+          <button className="chip mt" onClick={() => window.location.reload()}>
+            Попробовать снова
+          </button>
         </div>
       </div>
     );
