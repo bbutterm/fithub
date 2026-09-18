@@ -18,15 +18,20 @@ const r1 = (v: number) => Math.round(v * 10) / 10;
  * Имя сохранённого блюда по его составу.
  *
  * Человеку не хочется придумывать название на ходу, поэтому предлагаем своё:
- * одна позиция — её название, несколько — две главных через «с».
+ * две самые калорийные позиции через запятую. Запятая, а не «с»: склонять
+ * названия мы не умеем, и склейка давала «куриная грудка с рис отварной».
+ * Перечисление грамматически нейтрально при любых словах.
  */
 export function suggestRecipeName(items: RecipeItem[]): string {
-  const sorted = [...items].sort((a, b) => b.kcal - a.kcal);
-  const first = sorted[0]?.dish?.trim();
-  if (!first) return "Блюдо";
-  const second = sorted[1]?.dish?.trim();
-  const name = second ? `${first} с ${second.toLowerCase()}` : first;
-  return name.length > 60 ? `${name.slice(0, 57)}…` : name;
+  const parts = [...items]
+    .sort((a, b) => b.kcal - a.kcal)
+    .map((i) => i.dish?.trim())
+    .filter((d): d is string => Boolean(d))
+    .slice(0, 2);
+  if (parts.length === 0) return "Блюдо";
+  const name = parts.join(", ");
+  const capitalized = name.charAt(0).toUpperCase() + name.slice(1);
+  return capitalized.length > 60 ? `${capitalized.slice(0, 57)}…` : capitalized;
 }
 
 export function itemsOf(recipe: Recipe): RecipeItem[] {

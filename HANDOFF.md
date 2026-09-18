@@ -88,7 +88,15 @@ pnpm --filter bot-api prisma:migrate      # локальный Postgres
 pnpm seed                                 # тестовые данные
 pnpm dev:api                              # бот long polling + API :3000 + cron в процессе
 pnpm dev:webapp                           # Mini App :5173, прокси /api
-pnpm typecheck && pnpm lint && pnpm test  # 48 юнит-тестов, строгий TS, без any
+pnpm typecheck && pnpm lint && pnpm test  # 70 юнит-тестов, строгий TS, без any
+
+# Смоук обработчиков бота: команды и кнопки на настоящей базе, без выхода в сеть.
+# Юнит-тесты покрывают чистые функции, этот скрипт — то, что между ними.
+# Только на ОДНОРАЗОВОЙ базе: он создаёт и удаляет данные.
+createdb bote2e && for f in apps/bot-api/prisma/migrations/*/migration.sql; do psql -d bote2e -f "$f"; done
+cd apps/bot-api && DATABASE_URL=postgresql://localhost/bote2e BOT_TOKEN=0:test \
+  WEBAPP_URL=https://example.invalid VISION_API_KEY=test-key TEXT_API_KEY=test-key CRON_SECRET=test \
+  pnpm exec tsx scripts/smoke-bot.ts
 ```
 
 ⚠️ **Деплой сейчас заблокирован**: в проекте Vercel включён Ignored Build Step, он отменяет сборку и для превью, и для production (статус `Canceled by Ignored Build Step`). Пуш в `main` ничего не выкатывает — нужен Redeploy вручную или снятие этой настройки в Settings → Git.
