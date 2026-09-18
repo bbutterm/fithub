@@ -4,7 +4,7 @@ import type { DayResponse, Profile } from "../types";
 import { ProgressRing } from "../components/ProgressRing";
 import { SwipeRow } from "../components/SwipeRow";
 import { MealDetail } from "./MealDetail";
-import { haptic } from "../telegram";
+import { closeToBot, haptic } from "../telegram";
 
 interface Props {
   profile: Profile | null;
@@ -78,6 +78,7 @@ export function Today({ profile, initialMealId, userName }: Props) {
   const t = day?.totals;
   const timeFmt = new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" });
   const isToday = date === todayStr();
+  const kcalPercent = profile?.targetKcal ? Math.min(100, Math.max(0, ((t?.totalKcal ?? 0) / profile.targetKcal) * 100)) : 0;
   const dateLabel = new Intl.DateTimeFormat("ru-RU", { weekday: "long", day: "numeric", month: "long" }).format(
     new Date(`${date}T12:00:00`)
   );
@@ -94,12 +95,25 @@ export function Today({ profile, initialMealId, userName }: Props) {
       </div>
 
       <div className="card hero">
-        <div className="rings">
-          <ProgressRing value={t?.totalKcal ?? 0} target={profile?.targetKcal ?? null} label="Ккал" unit="ккал" color="var(--brand)" />
-          <ProgressRing value={t?.totalProtein ?? 0} target={profile?.targetProtein ?? null} label="Белки" unit="г" color="var(--protein)" />
-          <ProgressRing value={t?.totalFat ?? 0} target={profile?.targetFat ?? null} label="Жиры" unit="г" color="var(--fat)" />
-          <ProgressRing value={t?.totalCarbs ?? 0} target={profile?.targetCarbs ?? null} label="Углеводы" unit="г" color="var(--carbs)" />
+        <div className="hero-heading">
+          <div>
+            <p className="hint small">Цель на сегодня</p>
+            <div className="hero-kcal">
+              {Math.round(t?.totalKcal ?? 0)} <span>из {profile?.targetKcal ?? "—"} ккал</span>
+            </div>
+          </div>
+          <ProgressRing value={t?.totalKcal ?? 0} target={profile?.targetKcal ?? null} label="" unit="ккал" color="var(--brand)" size={82} />
         </div>
+        <div className="hero-progress" role="progressbar" aria-label="Прогресс калорий" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(kcalPercent)}>
+          <span style={{ width: `${kcalPercent}%` }} />
+        </div>
+        <div className="macro-grid">
+          <div><span className="macro-dot protein" />Белки <b>{Math.round(t?.totalProtein ?? 0)} г</b></div>
+          <div><span className="macro-dot fat" />Жиры <b>{Math.round(t?.totalFat ?? 0)} г</b></div>
+          <div><span className="macro-dot carbs" />Углеводы <b>{Math.round(t?.totalCarbs ?? 0)} г</b></div>
+        </div>
+        <button className="btn hero-action" onClick={closeToBot}>📷 Добавить еду</button>
+        <p className="hint small hero-note">Откроется чат бота — отправь фото или напиши, что съел</p>
       </div>
 
       <div className="card">

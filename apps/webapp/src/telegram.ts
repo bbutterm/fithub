@@ -9,6 +9,7 @@ interface TelegramWebApp {
   initDataUnsafe?: { start_param?: string };
   expand?: () => void;
   ready?: () => void;
+  close?: () => void;
   openInvoice?: (url: string, cb?: (status: string) => void) => void;
   HapticFeedback?: {
     notificationOccurred?: (type: "error" | "success" | "warning") => void;
@@ -56,6 +57,18 @@ export function getRawInitData(): string {
 
 export function getStartParam(): string | undefined {
   return webApp()?.initDataUnsafe?.start_param ?? webApp()?.start_param;
+}
+
+/** Закрываем Mini App и возвращаем человека в чат, чтобы добавить фото или текстом описать еду. */
+export function closeToBot(): void {
+  try {
+    const wa = webApp();
+    if (wa?.close) {
+      wa.close();
+    }
+  } catch {
+    /* noop */
+  }
 }
 
 export function openInvoice(url: string, onPaid: () => void): void {
