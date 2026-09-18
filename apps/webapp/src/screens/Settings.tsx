@@ -6,6 +6,8 @@ import { parseNum } from "./Onboarding";
 interface Props {
   profile: Profile;
   onSaved: (p: Profile) => void;
+  isAdmin?: boolean;
+  onOpenAdmin?: () => void;
 }
 
 const TONES: Array<{ v: Profile["adviceTone"]; l: string }> = [
@@ -16,7 +18,7 @@ const TONES: Array<{ v: Profile["adviceTone"]; l: string }> = [
 
 type NumKey = "birthYear" | "heightCm" | "weightKg" | "targetKcal" | "targetProtein" | "targetFat" | "targetCarbs";
 
-export function Settings({ profile, onSaved }: Props) {
+export function Settings({ profile, onSaved, isAdmin, onOpenAdmin }: Props) {
   const [p, setP] = useState<Profile>(profile);
   // Числовые поля храним строками: пустое поле остаётся пустым (Number("") === 0 давал «прилипающий 0»)
   const [nums, setNums] = useState<Record<NumKey, string>>({
@@ -144,6 +146,20 @@ export function Settings({ profile, onSaved }: Props) {
   return (
     <div className="screen">
       <h1>Настройки</h1>
+
+      {isAdmin && onOpenAdmin && (
+        <div className="card">
+          <div className="row spread">
+            <div>
+              <b>🛡 Админка</b>
+              <p className="hint small">пользователи, расходы, рассылка</p>
+            </div>
+            <button className="chip" onClick={onOpenAdmin}>
+              Открыть
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <h2>Профиль</h2>

@@ -6,6 +6,7 @@ import { Onboarding } from "./screens/Onboarding";
 import { Today } from "./screens/Today";
 import { Recipes } from "./screens/Recipes";
 import { Challenges } from "./screens/Challenges";
+import { warm } from "./prefetch";
 import { Analytics } from "./screens/Analytics";
 import { Settings } from "./screens/Settings";
 import { Subscription } from "./screens/Subscription";
@@ -54,6 +55,8 @@ export default function App() {
         setPlan(auth.plan);
         setIsAdmin(auth.isAdmin);
         setState("ready");
+        // Данные остальных вкладок — заранее и параллельно, пока человек смотрит первую
+        warm();
       } catch (err) {
         const raw = getRawInitData();
         setErrorDetail(
@@ -108,7 +111,9 @@ export default function App() {
       {tab === "recipes" && <Recipes />}
       {tab === "challenges" && <Challenges />}
       {tab === "analytics" && <Analytics plan={plan} onGoPro={() => setTab("subscription")} />}
-      {tab === "settings" && profile && <Settings profile={profile} onSaved={setProfile} />}
+      {tab === "settings" && profile && (
+        <Settings profile={profile} onSaved={setProfile} isAdmin={isAdmin} onOpenAdmin={() => setTab("admin")} />
+      )}
       {tab === "subscription" && <Subscription />}
       {tab === "admin" && isAdmin && <Admin />}
 
@@ -120,11 +125,15 @@ export default function App() {
             ["challenges", "🎯", "Челлендж"],
             ["analytics", "📈", "Аналитика"],
             ["settings", "⚙️", "Настройки"],
-            ["subscription", "⭐", "Pro"],
-            ...(isAdmin ? [["admin", "🛡", "Админ"] as [Tab, string, string]] : [])
+            ["subscription", "⭐", "Pro"]
           ] as Array<[Tab, string, string]>
         ).map(([id, icon, label]) => (
-          <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
+          // Админка открывается из настроек, поэтому пока она на экране — подсвечены настройки
+          <button
+            key={id}
+            className={tab === id || (tab === "admin" && id === "settings") ? "active" : ""}
+            onClick={() => setTab(id)}
+          >
             <span className="icon">{icon}</span>
             {label}
           </button>

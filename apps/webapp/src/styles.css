@@ -63,7 +63,11 @@ body {
 
 .screen {
   flex: 1;
-  padding: 16px 16px 84px;
+  /* Сверху — отступ под плавающую шапку Telegram (кнопки Close и «…» лежат
+     поверх страницы). Telegram сам выставляет эти переменные; вне Telegram
+     они нулевые, и остаётся обычный отступ. */
+  padding: calc(16px + var(--tg-content-safe-area-inset-top, 0px) + var(--tg-safe-area-inset-top, env(safe-area-inset-top, 0px)))
+    16px 84px;
   overflow-y: auto;
 }
 
@@ -210,7 +214,7 @@ input[type="range"] {
   display: flex;
   background: var(--tg-card);
   border-top: 1px solid color-mix(in srgb, var(--tg-hint) 20%, transparent);
-  padding-bottom: env(safe-area-inset-bottom);
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), var(--tg-safe-area-inset-bottom, 0px));
 }
 .tabbar {
   backdrop-filter: blur(12px);
@@ -227,8 +231,10 @@ input[type="range"] {
   text-overflow: ellipsis;
   background: none;
   border: none;
-  padding: 8px 0 10px;
-  font-size: 11px;
+  padding: 8px 2px 10px;
+  /* Шесть вкладок на узком экране: 10px помещаются без обрезки */
+  font-size: 10px;
+  letter-spacing: -0.01em;
   color: var(--tg-hint);
   cursor: pointer;
   transition: color 0.15s ease, transform 0.1s ease;

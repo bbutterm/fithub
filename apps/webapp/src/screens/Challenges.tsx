@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { ChallengesResponse, Feasibility } from "../types";
 import { haptic } from "../telegram";
+import { load, peek } from "../prefetch";
 
 // Пропуск и заморозка выглядят иначе, чем провал: человек должен видеть,
 // что прогресс цел, а не читать ряд одинаковых крестиков.
@@ -14,19 +15,18 @@ const DAY_TITLE: Record<string, string> = {
 };
 
 export function Challenges() {
-  const [data, setData] = useState<ChallengesResponse | null>(null);
+  const [data, setData] = useState<ChallengesResponse | null>(peek<ChallengesResponse>("challenges") ?? null);
   const [picked, setPicked] = useState<string | null>(null);
   const [check, setCheck] = useState<Feasibility | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  function reload() {
-    api
-      .challenges()
+  function reload(fresh = true) {
+    load<ChallengesResponse>("challenges", fresh)
       .then(setData)
       .catch(() => setError("Не удалось загрузить"));
   }
-  useEffect(reload, []);
+  useEffect(() => reload(!peek("challenges")), []);
 
   async function pick(templateId: string) {
     setPicked(templateId);
@@ -204,7 +204,7 @@ export function Challenges() {
                   </div>
                 </>
               ) : (
-                <button className="btn" onClick={() => void pick(t.id)}>Выбрать</button>
+                <button className="chip" onClick={() => void pick(t.id)}>Выбрать</button>
               )}
             </div>
           ))}

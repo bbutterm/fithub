@@ -4,6 +4,9 @@
   "buildCommand": "pnpm --filter bot-api prisma:generate && pnpm --filter webapp build",
   "ignoreCommand": "exit 1",
   "outputDirectory": "apps/webapp/dist",
+  "regions": [
+    "arn1"
+  ],
   "functions": {
     "api/index.ts": {
       "maxDuration": 60,

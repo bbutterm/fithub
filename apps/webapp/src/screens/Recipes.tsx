@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { Recipe } from "../types";
 import { haptic } from "../telegram";
+import { load, peek } from "../prefetch";
 
 const PORTIONS: Array<{ label: string; value: number }> = [
   { label: "½", value: 0.5 },
@@ -13,18 +14,19 @@ const PORTIONS: Array<{ label: string; value: number }> = [
 const r0 = (v: number) => Math.round(v);
 
 export function Recipes() {
-  const [recipes, setRecipes] = useState<Recipe[] | null>(null);
+  // Стартуем с предзагруженных данных: вкладка открывается без спиннера
+  const [recipes, setRecipes] = useState<Recipe[] | null>(peek<{ recipes: Recipe[] }>("recipes")?.recipes ?? null);
   const [open, setOpen] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
 
-  function reload() {
-    api
-      .recipes()
+  function reload(fresh = true) {
+    load<{ recipes: Recipe[] }>("recipes", fresh)
       .then((r) => setRecipes(r.recipes))
       .catch(() => setRecipes([]));
   }
-  useEffect(reload, []);
+  // Первый показ — из кэша, если он есть; иначе обычная загрузка
+  useEffect(() => reload(!peek("recipes")), []);
 
   async function log(recipe: Recipe, multiplier: number) {
     setBusy(true);

@@ -165,8 +165,11 @@ async function isDuplicateUpdate(updateId: number): Promise<boolean> {
 
 export async function buildServer() {
   const app = Fastify({ loggerInstance: logger });
-  // Probe ИИ-провайдеров: не блокирует старт, но подсказывает в логе про устаревшие модели
-  probeProvidersOnce();
+  // Probe ИИ-провайдеров подсказывает в логе про устаревшие модели. На Vercel
+  // каждый холодный старт — это два платных вызова и две строки мусора в учёте
+  // расходов (по ним мы три недели думали, что бот жив). Там пинг не нужен:
+  // ошибка модели и так видна по первому реальному запросу.
+  if (!process.env.VERCEL) probeProvidersOnce();
 
   // Отражаем любой источник — и это осознанно, а не «руки не дошли».
   //
@@ -433,8 +436,13 @@ export async function buildServer() {
   /** Состояние экрана целиком: активный челлендж, шаблоны и история. */
   app.get("/api/challenges", { preHandler: authenticate }, async (request) => {
     const uid = request.user.uid;
-    const user = await prisma.user.findUniqueOrThrow({ where: { id: uid } });
-    const part = await activeChallengeOf(uid);
+    // Три независимых запроса — параллельно: между Vercel и базой сотня
+    // миллисекунд на каждый, последовательно это заметно на глаз
+    const [user, part, finishedRows] = await Promise.all([
+      prisma.user.findUniqueOrThrow({ where: { id: uid } }),
+      activeChallengeOf(uid),
+      finishedChallengesOf(uid)
+    ]);
 
     const active = part
       ? await (async () => {
@@ -461,7 +469,7 @@ export async function buildServer() {
         })()
       : null;
 
-    const finished = (await finishedChallengesOf(uid)).map((p) => ({
+    const finished = finishedRows.map((p) => ({
       id: p.challenge.id,
       title: p.challenge.title,
       totalDays: p.challenge.days,
