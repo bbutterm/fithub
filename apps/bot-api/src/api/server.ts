@@ -253,8 +253,20 @@ export async function buildServer() {
   // Вызов: GET /api/setup-webhook?key=<CRON_SECRET>
   app.get("/api/setup-webhook", async (request, reply) => {
     const key = (request.query as { key?: string }).key;
-    if (!config.CRON_SECRET || key !== config.CRON_SECRET) {
-      return reply.code(401).send({ error: "unauthorized" });
+    // Два разных отказа с разным лечением: без CRON_SECRET эндпоинт заперт
+    // по замыслу, и никакой ключ не подойдёт — об этом надо сказать прямо,
+    // иначе человек будет перебирать ключи, а проблема в переменной окружения.
+    if (!config.CRON_SECRET) {
+      return reply.code(503).send({
+        error: "cron_secret_not_set",
+        hint: "Задайте CRON_SECRET в Vercel → Settings → Environment Variables (любая случайная строка), сделайте Redeploy и откройте эту ссылку с ?key=<значение>."
+      });
+    }
+    if (key !== config.CRON_SECRET) {
+      return reply.code(401).send({
+        error: "unauthorized",
+        hint: "Ключ не совпал с CRON_SECRET. Если в секрете есть символы + & # % =, их нужно закодировать для адресной строки: + → %2B и так далее."
+      });
     }
     const url = `${config.WEBAPP_URL}/api/tg-webhook`;
     await bot.api.setWebhook(url, { secret_token: config.webhookSecret });
