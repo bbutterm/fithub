@@ -144,9 +144,9 @@ export function Challenges() {
 
           <div className="card">
             <p className="hint small mb">Позвать друга — отправьте ему ссылку:</p>
-            <code className="small">{a.inviteUrl || `код: ${a.joinCode}`}</code>
+            <code className="small" style={{ wordBreak: "break-all" }}>{a.inviteUrl || `код: ${a.joinCode}`}</code>
             <div className="row wrap" style={{ marginTop: 12 }}>
-              <button className="btn secondary" onClick={() => void quit(a.id)}>
+              <button className="btn danger" onClick={() => void quit(a.id)}>
                 Бросить челлендж
               </button>
             </div>
@@ -180,7 +180,12 @@ export function Challenges() {
                     {check?.verdict !== "refuse" && (
                       <>
                         {check?.verdict === "risky" && check.suggestedValue !== undefined && (
-                          <button className="chip" disabled={busy} onClick={() => void start(t.id, check.suggestedValue)}>
+                          <button
+                            className="btn"
+                            style={{ width: "auto", padding: "10px 18px" }}
+                            disabled={busy}
+                            onClick={() => void start(t.id, check.suggestedValue)}
+                          >
                             Взять {check.suggestedValue}
                           </button>
                         )}

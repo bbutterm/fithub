@@ -82,11 +82,12 @@ export function Recipes() {
           <div className="card" key={r.id}>
             <div className="row spread">
               <b>{r.name}</b>
-              <span className="hint small">
+              {/* nowrap: у длинного названия «г» уезжало на вторую строку */}
+              <span className="hint small" style={{ whiteSpace: "nowrap", flexShrink: 0 }}>
                 {r0(r.kcal)} ккал · {r0(r.portionGrams)} г
               </span>
             </div>
-            <p className="hint small">
+            <p className="hint small mb">
               Б {r0(r.protein)} / Ж {r0(r.fat)} / У {r0(r.carbs)}
               {r.timesUsed > 0 ? ` · записано ${r.timesUsed} раз` : ""}
             </p>
@@ -114,7 +115,7 @@ export function Recipes() {
                 </div>
               </>
             ) : (
-              <button className="btn" onClick={() => setOpen(r.id)}>Записать в дневник</button>
+              <button className="chip" onClick={() => setOpen(r.id)}>Записать в дневник</button>
             )}
           </div>
         ))
