@@ -135,6 +135,14 @@ async function inviteBase(): Promise<string> {
   return `https://t.me/${botUsernameCache}?start=ch_`;
 }
 
+function safeDecode(v: string): string {
+  try {
+    return decodeURIComponent(v);
+  } catch {
+    return v;
+  }
+}
+
 // Межинстансовая дедупликация update_id через БД (таблица создаётся сама, миграция не нужна)
 let dedupeTableReady = false;
 async function isDuplicateUpdate(updateId: number): Promise<boolean> {
@@ -231,6 +239,11 @@ export async function buildServer() {
   // локальный час пользователя. Одна задача на оба дела — чтобы не держать
   // два набора по 24 записи в vercel.json.
   app.get("/api/cron/hourly", { preHandler: cronAuth }, async () => {
+    // Webhook чинится сам: если Telegram смотрит не на нас — переставляем.
+    // Бот молчал три недели после снятого webhook, и никто не заметил;
+    // крон приходит с верным секретом автоматически, ему ключ вводить не надо.
+    const { ensureWebhook } = await import("../services/webhook.js");
+    await ensureWebhook().catch((err) => logger.warn({ err: String(err) }, "webhook self-heal failed"));
     const { runDailyAdviceTick } = await import("../cron/dailyAdvice.js");
     const { runChallengeSummaryTick } = await import("../cron/challengeSummary.js");
     // Бюджеты заданы явно: у функции Vercel 60 секунд на всё, а тиков здесь два.
@@ -252,7 +265,13 @@ export async function buildServer() {
   // Разовая настройка: регистрация Telegram-webhook на WEBAPP_URL/api/tg-webhook.
   // Вызов: GET /api/setup-webhook?key=<CRON_SECRET>
   app.get("/api/setup-webhook", async (request, reply) => {
-    const key = (request.query as { key?: string }).key;
+    // Ключ берём из сырого URL, а не из распарсенного query: там «+» уже
+    // превращён в пробел, и секрет с плюсом никогда не совпадёт. Сравниваем
+    // и как есть, и после раскодирования — чтобы принимать оба варианта ввода.
+    const rawKey = /[?&]key=([^&#]*)/.exec(request.raw.url ?? "")?.[1] ?? "";
+    const candidates = new Set([rawKey, safeDecode(rawKey), (request.query as { key?: string }).key ?? ""]
+      .map((k) => k.trim()).filter(Boolean));
+    const key = [...candidates].find((k) => k === config.CRON_SECRET) ?? [...candidates][0];
     // Два разных отказа с разным лечением: без CRON_SECRET эндпоинт заперт
     // по замыслу, и никакой ключ не подойдёт — об этом надо сказать прямо,
     // иначе человек будет перебирать ключи, а проблема в переменной окружения.
