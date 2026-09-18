@@ -14,18 +14,25 @@ export function Analytics({ plan, onGoPro }: Props) {
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [proRequired, setProRequired] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
+    setError(false);
     setProRequired(false);
     api
       .analytics(period)
-      .then(setData)
+      .then(r => { if (active) setData(r); })
       .catch((e) => {
+        if (!active) return;
+        setError(true);
         if (e instanceof ApiError && (e.code === "pro_required" || e.status === 402)) setProRequired(true);
       })
-      .finally(() => setLoading(false));
-  }, [period]);
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [period, attempt]);
 
   const avgRow = (label: string, avg: number, target: number | null, unit = "г") => (
     <div className="row spread" key={label}>
@@ -51,12 +58,15 @@ export function Analytics({ plan, onGoPro }: Props) {
       ) : proRequired ? (
         <div className="card center">
           <h2>Месячная аналитика — в Pro</h2>
-          <p className="hint mb">Динамика за 30 дней, месячные отчёты нутрициолога и безлимит распознаваний.</p>
-          <button className="btn" onClick={onGoPro}>Подключить Pro</button>
+          <p className="hint mb">Новые покупки временно недоступны. Недельная аналитика остаётся доступной.</p>
+          <button className="btn" onClick={onGoPro}>Статус Premium</button>
         </div>
-      ) : data ? (
+      ) : error ? <div className="card" role="alert"><p className="hint mb">Не удалось загрузить аналитику.</p><button className="chip" onClick={() => setAttempt(x => x + 1)}>Повторить</button></div> : data ? (
         <>
           <div className="card">
+            <p className="eyebrow">Твоя регулярность</p>
+            <h2>Записи в {data.days.filter(d => d.mealsCount > 0).length} из {data.days.length} дней</h2>
+            <p className="hint small mb">Пустой день означает отсутствие записей, а не отсутствие еды.</p>
             <h2>Калории по дням</h2>
             <BarChart days={data.days} target={data.targets.kcal} />
           </div>

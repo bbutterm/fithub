@@ -54,6 +54,7 @@ body {
 }
 
 #root {
+  color: var(--tg-text);
   max-width: 560px;
   margin: 0 auto;
   min-height: 100vh;
@@ -135,6 +136,7 @@ h2 {
   box-shadow: none;
 }
 .btn.danger {
+  box-shadow: none;
   background: transparent;
   color: #e53935;
 }
@@ -194,7 +196,7 @@ label.field {
 label.field span {
   display: block;
   font-size: 13px;
-  color: var(--tg-hint);
+  color: color-mix(in srgb, var(--tg-text) 68%, var(--tg-bg));
   margin-bottom: 4px;
 }
 
@@ -398,79 +400,42 @@ input[type="range"] {
   border-color: color-mix(in srgb, var(--brand) 22%, transparent);
 }
 
-.hero-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+/* Nutrition hierarchy: preserve the three macro rings at every width. */
+.screen-intro { margin-bottom: 20px; }
+h1 { letter-spacing: -.025em; margin-bottom: 12px; }
+.hint { line-height: 1.5; color: color-mix(in srgb, var(--tg-text) 68%, var(--tg-bg)); }
+.card { padding: 18px; border-radius: 20px; }
+.chip, .btn { min-height: 44px; }
+button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+  outline: 3px solid var(--protein); outline-offset: 3px;
 }
-.hero-heading > div {
-  min-width: 0;
-  flex: 1;
-}
-.hero-heading > svg {
-  flex-shrink: 0;
-}
-.hero-kcal {
-  margin-top: 4px;
-  font-size: clamp(22px, 7vw, 28px);
-  line-height: 1.1;
-  font-weight: 800;
-  letter-spacing: -0.04em;
-  font-variant-numeric: tabular-nums;
-}
-.hero-kcal span {
-  color: var(--tg-hint);
-  font-size: 14px;
-  font-weight: 500;
-  letter-spacing: 0;
-}
-.hero-progress {
-  height: 9px;
-  margin: 4px 0 14px;
-  overflow: hidden;
-  border-radius: 99px;
-  background: color-mix(in srgb, var(--brand) 15%, var(--tg-secondary-bg));
-}
-.hero-progress span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--brand), var(--brand-deep));
-  transition: width 0.7s cubic-bezier(0.22, 1, 0.36, 1);
-}
-.macro-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  margin-bottom: 14px;
-}
-.macro-grid > div {
-  min-width: 0;
-  padding: 8px 6px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--tg-secondary-bg) 72%, transparent);
-  color: var(--tg-hint);
-  font-size: 11px;
-  text-align: center;
-}
-.macro-grid b {
-  display: block;
-  margin-top: 2px;
-  color: var(--tg-text);
-  font-size: 14px;
-  font-variant-numeric: tabular-nums;
-}
-.macro-dot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  margin-right: 4px;
-  border-radius: 50%;
-}
-.macro-dot.protein { background: var(--protein); }
-.macro-dot.fat { background: var(--fat); }
-.macro-dot.carbs { background: var(--carbs); }
+button:disabled { cursor: not-allowed; }
+.screen { padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px)); }
+.tabbar { z-index: 20; }
+.tabbar button { min-height: 64px; font-size: 11px; }
+.tabbar button.active { background: color-mix(in srgb, var(--brand) 9%, transparent); }
+.calorie-summary { display: grid; grid-template-columns: 116px minmax(0, 1fr); gap: 20px; align-items: center; margin: 20px 0; }
+.balance-value { display: block; font-size: clamp(20px, 6vw, 28px); letter-spacing: -.03em; margin: 4px 0; }
+.eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: color-mix(in srgb, var(--tg-text) 68%, var(--tg-bg)); }
+.macro-rings { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 18px 0; margin-bottom: 16px; border-top: 1px solid color-mix(in srgb, var(--tg-hint) 20%, transparent); }
+.progress-ring { min-width: 0; text-align: center; }
+.progress-ring svg { max-width: 100%; height: auto; }
+.ring-label { color: var(--tg-text); font-size: 12px; }
+.meal-title { font-size: 15px; line-height: 1.4; font-weight: 600; margin: 4px 0; overflow-wrap: anywhere; }
+.meal-thumb { width: 60px; height: 60px; border-radius: 14px; }
+.premium-placeholder { margin-top: 20px; padding: 28px 22px; }
+.premium-placeholder h2 { font-size: 26px; margin: 18px 0 12px; }
+.status-pill { display: inline-block; border-radius: 99px; background: color-mix(in srgb, var(--brand) 12%, var(--tg-card)); padding: 8px 12px; font-size: 12px; font-weight: 600; }
+.subscription-link { width: 100%; color: var(--tg-text); text-align: left; display: flex; align-items: center; justify-content: space-between; cursor: pointer; font: inherit; }
+.subscription-link small { display: block; margin-top: 6px; color: var(--tg-hint); }
+.step-track { display: flex; gap: 6px; margin: 12px 0 24px; }
+.step-track span { flex: 1; height: 5px; border-radius: 9px; background: color-mix(in srgb, var(--tg-hint) 20%, transparent); }
+.step-track .done { background: var(--brand-deep); }
+.error-state { border-color: var(--over); }
+.row > * { min-width: 0; }
+.row > b { overflow-wrap: anywhere; }
+@media (max-width: 359px) { .card { padding: 14px; } .calorie-summary { gap: 12px; } .tabbar button { font-size: 10px; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
 .hero-action {
   padding: 12px 14px;
 }

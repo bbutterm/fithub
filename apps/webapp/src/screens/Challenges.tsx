@@ -29,11 +29,14 @@ export function Challenges() {
   useEffect(() => reload(!peek("challenges")), []);
 
   async function pick(templateId: string) {
+    setError("");
     setPicked(templateId);
     setCheck(null);
     try {
       setCheck(await api.challengeFeasibility(templateId));
     } catch {
+      setError("Не удалось проверить историю. Попробуй выбрать челлендж снова.");
+      setPicked(null);
       setCheck(null);
     }
   }
@@ -57,15 +60,14 @@ export function Challenges() {
 
   async function quit(id: number) {
     if (!window.confirm("Бросить челлендж? Прогресс останется в истории.")) return;
-    await api.quitChallenge(id).catch(() => undefined);
-    haptic("light");
-    reload();
+    try { await api.quitChallenge(id); haptic("light"); reload(); }
+    catch { setError("Не удалось завершить челлендж. Попробуй ещё раз."); }
   }
 
   if (!data) {
     return (
       <div className="screen center">
-        {error ? <p className="hint">{error}</p> : <div className="spinner" />}
+        {error ? <><p role="alert" className="hint">{error}</p><button className="chip mt" onClick={() => { setError(""); reload(); }}>Повторить</button></> : <div className="spinner" />}
       </div>
     );
   }
@@ -177,7 +179,7 @@ export function Challenges() {
                     check.reason && <p className="small mb">{check.reason}</p>
                   )}
                   <div className="row wrap">
-                    {check?.verdict !== "refuse" && (
+                    {check !== null && check.verdict !== "refuse" && (
                       <>
                         {check?.verdict === "risky" && check.suggestedValue !== undefined && (
                           <button

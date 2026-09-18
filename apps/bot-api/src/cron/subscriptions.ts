@@ -1,21 +1,18 @@
-import { InlineKeyboard } from "grammy";
 import { logger } from "../logger.js";
 import { bot } from "../bot/bot.js";
-import { config } from "../config.js";
+import { paywallKeyboard } from "../bot/payments.js";
 import { expireSubscriptions } from "../services/subscription.js";
 
-/** Ежедневно: деактивация истёкших подписок + предложение продлить. */
+/** Ежедневно: деактивация истёкших подписок и уведомление о статусе. */
 export async function runSubscriptionExpiryTick(): Promise<void> {
   const expired = await expireSubscriptions();
   for (const sub of expired) {
     try {
       await bot.api.sendMessage(
         Number(sub.user.tgUserId),
-        "Подписка Pro закончилась 😢 Возвращаю бесплатный тариф: 3 распознавания в день и советы 2 раза в неделю.\n\nПродлить можно в один тап:",
+        "Подписка Pro закончилась. Теперь действует бесплатный тариф.\n\nПокупки и продление Pro сейчас недоступны. Лимит распознаваний можно проверить в статусе подписки.",
         {
-          reply_markup: new InlineKeyboard()
-            .text(`⭐ Месяц — ${config.STARS_PRICE_MONTH} Stars`, "pay:month")
-            .text(`⭐ Год — ${config.STARS_PRICE_YEAR} Stars`, "pay:year")
+          reply_markup: paywallKeyboard()
         }
       );
     } catch (err) {

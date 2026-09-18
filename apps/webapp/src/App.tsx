@@ -112,27 +112,27 @@ export default function App() {
       {tab === "challenges" && <Challenges />}
       {tab === "analytics" && <Analytics plan={plan} onGoPro={() => setTab("subscription")} />}
       {tab === "settings" && profile && (
-        <Settings profile={profile} onSaved={setProfile} isAdmin={isAdmin} onOpenAdmin={() => setTab("admin")} />
+        <Settings profile={profile} onSaved={setProfile} onOpenSubscription={() => setTab("subscription")} isAdmin={isAdmin} onOpenAdmin={() => setTab("admin")} />
       )}
-      {tab === "subscription" && <Subscription />}
+      {tab === "subscription" && <Subscription onBack={() => setTab("settings")} />}
       {tab === "admin" && isAdmin && <Admin />}
 
-      <nav className="tabbar">
+      <nav className="tabbar" aria-label="Основная навигация">
         {(
           [
             ["today", "🍽", "Сегодня"],
             ["recipes", "🍲", "Блюда"],
             ["challenges", "🎯", "Челлендж"],
             ["analytics", "📈", "Аналитика"],
-            ["settings", "⚙️", "Настройки"],
-            ["subscription", "⭐", "Pro"]
+            ["settings", "⚙️", "Профиль"]
           ] as Array<[Tab, string, string]>
         ).map(([id, icon, label]) => (
           // Админка открывается из настроек, поэтому пока она на экране — подсвечены настройки
           <button
             key={id}
-            className={tab === id || (tab === "admin" && id === "settings") ? "active" : ""}
-            onClick={() => setTab(id)}
+            className={tab === id || ((tab === "admin" || tab === "subscription") && id === "settings") ? "active" : ""}
+            aria-current={tab === id || ((tab === "admin" || tab === "subscription") && id === "settings") ? "page" : undefined}
+            onClick={() => { setTab(id); window.scrollTo(0, 0); }}
           >
             <span className="icon">{icon}</span>
             {label}

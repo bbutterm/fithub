@@ -8,6 +8,7 @@ interface Props {
   onSaved: (p: Profile) => void;
   isAdmin?: boolean;
   onOpenAdmin?: () => void;
+  onOpenSubscription: () => void;
 }
 
 const TONES: Array<{ v: Profile["adviceTone"]; l: string }> = [
@@ -18,7 +19,7 @@ const TONES: Array<{ v: Profile["adviceTone"]; l: string }> = [
 
 type NumKey = "birthYear" | "heightCm" | "weightKg" | "targetKcal" | "targetProtein" | "targetFat" | "targetCarbs";
 
-export function Settings({ profile, onSaved, isAdmin, onOpenAdmin }: Props) {
+export function Settings({ profile, onSaved, isAdmin, onOpenAdmin, onOpenSubscription }: Props) {
   const [p, setP] = useState<Profile>(profile);
   // Числовые поля храним строками: пустое поле остаётся пустым (Number("") === 0 давал «прилипающий 0»)
   const [nums, setNums] = useState<Record<NumKey, string>>({
@@ -145,7 +146,9 @@ export function Settings({ profile, onSaved, isAdmin, onOpenAdmin }: Props) {
 
   return (
     <div className="screen">
-      <h1>Настройки</h1>
+      <h1>Профиль</h1>
+      <p className="hint screen-intro">Цели, предпочтения и настройки дневника</p>
+      <button className="card subscription-link" onClick={onOpenSubscription}><span><b>Premium</b><small>Покупки временно недоступны</small></span><span aria-hidden="true">→</span></button>
 
       {isAdmin && onOpenAdmin && (
         <div className="card">
@@ -298,7 +301,7 @@ export function Settings({ profile, onSaved, isAdmin, onOpenAdmin }: Props) {
       </div>
 
       {error && <p className="hint mb" style={{ color: "#e53935" }}>{error}</p>}
-      <button className="btn" disabled={saving} onClick={() => void save()}>
+      <button className="btn mb" disabled={saving} onClick={() => void save()}>
         {saving ? "Сохраняю…" : saved ? "Сохранено ✓" : "Сохранить"}
       </button>
     

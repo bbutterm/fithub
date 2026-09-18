@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiError, photoUrl } from "../api";
 import type { Meal } from "../types";
 
@@ -17,6 +17,26 @@ export function MealDetail({ mealId, onClose }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [changed, setChanged] = useState(false);
+  const dialog = useRef<HTMLDivElement>(null);
+  const dismiss = useRef(() => onClose(changed));
+  dismiss.current = () => { if (!busy) onClose(changed); };
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    dialog.current?.focus();
+    const keydown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") dismiss.current();
+      if (e.key !== "Tab") return;
+      const nodes = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex="0"]') ?? []);
+      const first = nodes[0], last = nodes[nodes.length - 1];
+      if (!first || !last) { e.preventDefault(); return; }
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (document.activeElement === last || document.activeElement === dialog.current)) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", keydown);
+    return () => { document.body.style.overflow = overflow; document.removeEventListener("keydown", keydown); previous?.focus(); };
+  }, []);
 
   useEffect(() => {
     api
@@ -95,23 +115,23 @@ export function MealDetail({ mealId, onClose }: Props) {
 
   async function removeMeal() {
     if (!meal) return;
-    await api.deleteMeal(meal.id);
-    onClose(true);
+    if (!window.confirm("Удалить весь приём пищи? Это действие нельзя отменить.")) return;
+    setBusy(true);
+    try { await api.deleteMeal(meal.id); onClose(true); }
+    catch { setError("Не удалось удалить приём. Попробуй ещё раз."); }
+    finally { setBusy(false); }
   }
 
   return (
-    <div className="modal-backdrop" onClick={() => onClose(changed)}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop" onClick={() => dismiss.current()}>
+      <div ref={dialog} tabIndex={-1} className="modal" role="dialog" aria-modal="true" aria-label="Приём пищи" onClick={(e) => e.stopPropagation()}>
+        <div className="row spread mb"><h2>Приём пищи</h2><button className="chip" disabled={busy} onClick={() => dismiss.current()}>Закрыть</button></div>
         {loading ? (
           <div className="spinner" />
         ) : !meal ? (
           <p className="hint">{error || "Приём пищи не найден"}</p>
         ) : (
           <>
-            <div className="row spread mb">
-              <h2>Приём пищи</h2>
-              <button className="chip" onClick={() => onClose(changed)}>Закрыть</button>
-            </div>
             {meal.hasPhoto && (
               <img
                 src={photoUrl(meal)}
@@ -125,6 +145,7 @@ export function MealDetail({ mealId, onClose }: Props) {
               <div className="row spread">
                 <span className="hint small">🕐 Время приёма</span>
                 <input
+                  aria-label="Время приёма пищи"
                   type="time"
                   style={{ width: 120 }}
                   value={new Date(meal.eatenAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
@@ -157,6 +178,7 @@ export function MealDetail({ mealId, onClose }: Props) {
                   );
                 })()}
                 <input
+                  aria-label={`Порция: ${it.dish}, граммы`}
                   type="range"
                   min={10}
                   max={Math.max(600, it.grams * 2)}
@@ -164,6 +186,7 @@ export function MealDetail({ mealId, onClose }: Props) {
                   value={grams[it.id] ?? it.grams}
                   disabled={busy}
                   onChange={(e) => setGrams({ ...grams, [it.id]: Number(e.target.value) })}
+                  onKeyUp={() => void commitGrams(it.id, grams[it.id] ?? it.grams)}
                   onMouseUp={() => void commitGrams(it.id, grams[it.id] ?? it.grams)}
                   onTouchEnd={() => void commitGrams(it.id, grams[it.id] ?? it.grams)}
                 />
@@ -176,8 +199,8 @@ export function MealDetail({ mealId, onClose }: Props) {
             <div className="card">
               <p className="hint small mb">Добавить блюдо текстом</p>
               <div className="row">
-                <input type="text" value={addText} placeholder="ещё был компот…" onChange={(e) => setAddText(e.target.value)} />
-                <button className="btn" style={{ width: "auto" }} disabled={busy || addText.trim().length < 3} onClick={() => void addItem()}>
+                <input aria-label="Добавить блюдо текстом" type="text" value={addText} placeholder="ещё был компот…" onChange={(e) => setAddText(e.target.value)} />
+                <button aria-label="Добавить блюдо" className="btn" style={{ width: "auto" }} disabled={busy || addText.trim().length < 3} onClick={() => void addItem()}>
                   +
                 </button>
               </div>

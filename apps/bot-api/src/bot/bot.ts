@@ -34,18 +34,18 @@ import { deleteAccount, summarizeAccount, upsertUserFromTelegram } from "../serv
 import { addDays, localDateStr, zonedTimeToUtc } from "../utils/tz.js";
 import { formatDaySummary, formatMealCard } from "./cards.js";
 import { checkRateLimit } from "./queue.js";
-import { paywallKeyboard, registerPaymentHandlers } from "./payments.js";
+import { paywallKeyboard, PURCHASES_UNAVAILABLE_TEXT, registerPaymentHandlers } from "./payments.js";
 
 type MealWithItems = Meal & { items: MealItem[] };
 
 export const bot = new Bot(config.BOT_TOKEN);
 
-/** Текст при исчерпанном дневном лимите. Один на фото и на голосовые. */
+/** Общий текст при исчерпанном дневном лимите: фото, текст и голосовые. */
 function limitReachedText(limit: number): string {
   return [
-    `На бесплатном тарифе — ${limit} распознавания в день, и на сегодня они закончились 😌`,
+    `Дневной лимит распознаваний (${limit}) на сегодня исчерпан 😌 Попробуй завтра.`,
     "",
-    "С <b>Pro</b> распознавания безлимитные, советы приходят каждый день, а аналитика открыта за месяц."
+    PURCHASES_UNAVAILABLE_TEXT
   ].join("\n");
 }
 
@@ -856,7 +856,7 @@ async function handleContextualText(
         await ctx.api.editMessageText(
           ctx.chat.id,
           status.message_id,
-          `На бесплатном тарифе — ${limit.limit} распознавания в день, и на сегодня они закончились 😌 С Pro — безлимит.`,
+          limitReachedText(limit.limit ?? config.FREE_PHOTOS_PER_DAY),
           { reply_markup: paywallKeyboard() }
         );
         return;

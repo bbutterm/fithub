@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, photoUrl } from "../api";
 import type { DayResponse, Profile } from "../types";
 import { ProgressRing } from "../components/ProgressRing";
@@ -30,20 +30,30 @@ export function Today({ profile, initialMealId, userName }: Props) {
   const [openMeal, setOpenMeal] = useState<number | null>(initialMealId ?? null);
   const [loading, setLoading] = useState(!dayCache.has(todayStr()));
 
+  const [error, setError] = useState("");
+  const sequence = useRef(0);
+  const selectedDate = useRef(date);
+  selectedDate.current = date;
+
   const load = useCallback((d: string, silent = false) => {
-    if (!silent && !dayCache.has(d)) setLoading(true);
+    // A mutation started on another day must not replace the visible day.
+    if (d !== selectedDate.current) return;
+    const seq = ++sequence.current;
+    setError("");
+    if (!silent) setLoading(!dayCache.has(d));
     const cached = dayCache.get(d);
-    if (cached) setDay(cached); // мгновенный показ из кэша, ниже — фоновое обновление
+    if (!silent) setDay(cached ?? null);
     api
       .day(d)
       .then((res) => {
         dayCache.set(d, res);
-        setDay(res);
+        if (seq === sequence.current) setDay(res);
       })
-      .finally(() => setLoading(false));
+      .catch(() => { if (seq === sequence.current) setError("Не удалось обновить дневник. Проверь соединение и повтори."); })
+      .finally(() => { if (seq === sequence.current) setLoading(false); });
   }, []);
 
-  useEffect(() => load(date), [date, load]);
+  useEffect(() => { load(date); return () => { sequence.current++; }; }, [date, load]);
 
   // Возврат в приложение (после отправки фото боту) — тихо обновляем день
   useEffect(() => {
@@ -55,6 +65,7 @@ export function Today({ profile, initialMealId, userName }: Props) {
   }, [date, load]);
 
   async function removeMeal(mealId: number) {
+    if (!window.confirm("Удалить приём пищи? Это действие нельзя отменить.")) return;
     haptic("light");
     // Оптимистично: убираем запись сразу, сервер догоняет
     setDay((prev) =>
@@ -78,7 +89,7 @@ export function Today({ profile, initialMealId, userName }: Props) {
   const t = day?.totals;
   const timeFmt = new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" });
   const isToday = date === todayStr();
-  const kcalPercent = profile?.targetKcal ? Math.min(100, Math.max(0, ((t?.totalKcal ?? 0) / profile.targetKcal) * 100)) : 0;
+  const remaining = profile?.targetKcal ? profile.targetKcal - (t?.totalKcal ?? 0) : null;
   const dateLabel = new Intl.DateTimeFormat("ru-RU", { weekday: "long", day: "numeric", month: "long" }).format(
     new Date(`${date}T12:00:00`)
   );
@@ -87,39 +98,36 @@ export function Today({ profile, initialMealId, userName }: Props) {
     <div className="screen">
       <h1>{isToday && userName ? `Привет, ${userName}! 👋` : "Дневник"}</h1>
       <div className="row spread mb">
-        <button className="chip date-nav" onClick={() => setDate(shiftDate(date, -1))}>‹</button>
+        <button aria-label="Предыдущий день" className="chip date-nav" onClick={() => setDate(shiftDate(date, -1))}>‹</button>
         <span className="hint" style={{ textTransform: "capitalize" }}>
-          {isToday ? "Сегодня" : dateLabel}
+          {isToday ? `Сегодня · ${new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}` : dateLabel}
         </span>
-        <button className="chip date-nav" disabled={isToday} onClick={() => setDate(shiftDate(date, 1))}>›</button>
+        <button aria-label="Следующий день" className="chip date-nav" disabled={isToday} onClick={() => setDate(shiftDate(date, 1))}>›</button>
       </div>
 
-      <div className="card hero">
-        <div className="hero-heading">
-          <div>
-            <p className="hint small">Цель на сегодня</p>
-            <div className="hero-kcal">
-              {Math.round(t?.totalKcal ?? 0)} <span>из {profile?.targetKcal ?? "—"} ккал</span>
-            </div>
+      {!isToday && <button className="chip mb" onClick={() => setDate(todayStr())}>Вернуться к сегодня</button>}
+      {error && <div className="card error-state" role="alert"><p>{error}</p><button className="chip mt" onClick={() => load(date)}>Повторить</button></div>}
+      <section className="card hero nutrition-card" aria-busy={loading}>
+        <div className="row spread mb"><h2>Баланс дня</h2><span className="hint small">{isToday ? "Сегодня" : "Выбранный день"}</span></div>
+        {loading && !day ? <div className="skeleton-row" aria-label="Загружаем баланс" /> : error && !day ? <p className="hint mb">Баланс пока недоступен</p> : <>
+          <div className="calorie-summary">
+            <ProgressRing value={t?.totalKcal ?? 0} target={profile?.targetKcal ?? null} label="Калории, ккал" unit="ккал" color="var(--brand)" size={116} />
+            <div><p className="eyebrow">Твой ориентир</p><b className="balance-value">{remaining === null ? "Цель не задана" : `${Math.round(Math.abs(remaining))} ккал`}</b><p className="hint">{remaining === null ? "Задай её в профиле" : remaining >= 0 ? "до дневной цели" : "выше дневной цели"}</p><p className="hint small mt">Один день не определяет результат</p></div>
           </div>
-          <ProgressRing value={t?.totalKcal ?? 0} target={profile?.targetKcal ?? null} label="" unit="ккал" color="var(--brand)" size={82} />
-        </div>
-        <div className="hero-progress" role="progressbar" aria-label="Прогресс калорий" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(kcalPercent)}>
-          <span style={{ width: `${kcalPercent}%` }} />
-        </div>
-        <div className="macro-grid">
-          <div><span className="macro-dot protein" />Белки <b>{Math.round(t?.totalProtein ?? 0)} г</b></div>
-          <div><span className="macro-dot fat" />Жиры <b>{Math.round(t?.totalFat ?? 0)} г</b></div>
-          <div><span className="macro-dot carbs" />Углеводы <b>{Math.round(t?.totalCarbs ?? 0)} г</b></div>
-        </div>
-        <button className="btn hero-action" onClick={closeToBot}>📷 Добавить еду</button>
-        <p className="hint small hero-note">Откроется чат бота — отправь фото или напиши, что съел</p>
-      </div>
+          <div className="macro-rings rings">
+            <ProgressRing value={t?.totalProtein ?? 0} target={profile?.targetProtein ?? null} label="Белки, г" unit="г" color="var(--protein)" size={86} />
+            <ProgressRing value={t?.totalFat ?? 0} target={profile?.targetFat ?? null} label="Жиры, г" unit="г" color="var(--fat)" size={86} />
+            <ProgressRing value={t?.totalCarbs ?? 0} target={profile?.targetCarbs ?? null} label="Углеводы, г" unit="г" color="var(--carbs)" size={86} />
+          </div>
+        </>}
+        <button className="btn hero-action" onClick={closeToBot}>Добавить еду в чате ↗</button>
+        <p className="hint small hero-note">Закрой Mini App и отправь боту фото или описание еды</p>
+      </section>
 
       <div className="card">
         <div className="row spread mb">
           <h2 style={{ margin: 0 }}>Приёмы пищи</h2>
-          {day && day.meals.length > 0 && <span className="hint small">свайп влево — действия</span>}
+          {day && day.meals.length > 0 && <span className="hint small">Записей: {day.meals.length}</span>}
         </div>
         {loading && !day ? (
           <>
@@ -127,7 +135,7 @@ export function Today({ profile, initialMealId, userName }: Props) {
             <div className="skeleton-row" />
             <div className="skeleton-row" />
           </>
-        ) : !day || day.meals.length === 0 ? (
+        ) : error && !day ? <p className="hint">Записи не загружены.</p> : !day || day.meals.length === 0 ? (
           <div className="empty-state">
             <div className="empty-emoji">📸</div>
             <p className="hint">
@@ -154,7 +162,8 @@ export function Today({ profile, initialMealId, userName }: Props) {
                     <b>{timeFmt.format(new Date(m.eatenAt))}</b>
                     <b className="progress-badge">{Math.round(m.totalKcal)} ккал</b>
                   </div>
-                  <p className="hint small ellipsis">{m.items.map((i) => i.dish).join(", ")}</p>
+                  <p className="meal-title">{m.items.map((i) => i.dish).join(", ")}</p>
+                  <p className="hint small">Б {Math.round(m.totalProtein)} · Ж {Math.round(m.totalFat)} · У {Math.round(m.totalCarbs)} г</p>
                 </div>
               </div>
             </SwipeRow>

@@ -143,6 +143,7 @@ export function Onboarding({ onDone }: Props) {
     <div className="screen">
       <h1>Настроим твоего нутрициолога</h1>
       <p className="hint mb">Шаг {step + 1} из {steps.length}</p>
+      <div className="step-track" aria-label={`Шаг ${step + 1} из ${steps.length}`}>{steps.map((_, i) => <span key={i} className={i <= step ? "done" : ""} />)}</div>
       {steps[step]}
       {error && <p className="hint mb" style={{ color: "#e53935" }}>{error}</p>}
       <div className="row">

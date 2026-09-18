@@ -11,12 +11,12 @@ export function ProgressRing({ value, target, label, unit, color, size = 74 }: P
   const stroke = 6;
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
-  const ratio = target && target > 0 ? Math.min(1, value / target) : 0;
+  const ratio = target && target > 0 ? Math.max(0, Math.min(1, value / target)) : 0;
   const over = target !== null && target > 0 && value > target;
 
   return (
-    <div>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+    <div className="progress-ring">
+      <svg role="img" aria-label={`${label}: ${Math.round(value)} ${unit}${target ? ` из ${target} ${unit}` : ""}`} width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <circle
           cx={size / 2}
           cy={size / 2}

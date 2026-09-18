@@ -86,6 +86,9 @@ export function SwipeRow({ children, onTap, onEdit, onDelete }: Props) {
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleTap(); } }}
         onClick={handleTap}
       >
         {children}

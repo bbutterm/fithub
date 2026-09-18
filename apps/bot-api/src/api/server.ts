@@ -35,7 +35,6 @@ import {
   ruleOf
 } from "../services/challenges.js";
 import { assessFeasibility, CHALLENGE_TEMPLATES, describeRule, getTemplate, withValue } from "../challenges.js";
-import { PLAN_PAYLOADS } from "../bot/payments.js";
 import { bot } from "../bot/bot.js";
 
 declare module "@fastify/jwt" {
@@ -759,19 +758,9 @@ export async function buildServer() {
   // Стенд моделей: своя проверка по ключу в ссылке, Telegram и JWT не участвуют
   registerBenchRoutes(app as unknown as Parameters<typeof registerBenchRoutes>[0]);
 
-  app.post("/api/subscription/invoice", { preHandler: authenticate }, async (request, reply) => {
-    const body = z.object({ plan: z.enum(["month", "year"]) }).safeParse(request.body);
-    if (!body.success) return reply.code(400).send({ error: "bad_request" });
-    const p = PLAN_PAYLOADS[body.data.plan];
-    const link = await bot.api.createInvoiceLink(
-      p.title,
-      "Безлимит распознаваний, ежедневные советы, месячная аналитика и отчёты.",
-      p.payload,
-      "", // provider_token пуст для Telegram Stars
-      "XTR",
-      [{ label: p.title, amount: p.stars() }]
-    );
-    return { link };
+  // Покупки приостановлены: даже старые клиенты не должны получать новые счета.
+  app.post("/api/subscription/invoice", { preHandler: authenticate }, async (_request, reply) => {
+    return reply.code(503).send({ error: "purchases_unavailable" });
   });
 
   return app;

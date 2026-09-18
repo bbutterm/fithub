@@ -19,11 +19,16 @@ export function Recipes() {
   const [open, setOpen] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
+  const [error, setError] = useState("");
+  const [editing, setEditing] = useState<Recipe | null>(null);
+  const [name, setName] = useState("");
+  const [deleting, setDeleting] = useState<Recipe | null>(null);
 
   function reload(fresh = true) {
+    setError("");
     load<{ recipes: Recipe[] }>("recipes", fresh)
       .then((r) => setRecipes(r.recipes))
-      .catch(() => setRecipes([]));
+      .catch(() => setError("Не удалось загрузить блюда. Повтори попытку."));
   }
   // Первый показ — из кэша, если он есть; иначе обычная загрузка
   useEffect(() => reload(!peek("recipes")), []);
@@ -46,23 +51,23 @@ export function Recipes() {
   }
 
   async function rename(recipe: Recipe) {
-    const name = window.prompt("Название блюда", recipe.name)?.trim();
-    if (!name || name === recipe.name) return;
-    await api.renameRecipe(recipe.id, name).catch(() => undefined);
-    reload();
+    if (!name.trim()) return;
+    setBusy(true);
+    try { await api.renameRecipe(recipe.id, name.trim()); setEditing(null); reload(); }
+    catch { setToast("Не удалось сохранить название. Попробуй ещё раз."); }
+    finally { setBusy(false); }
   }
-
   async function remove(recipe: Recipe) {
-    if (!window.confirm(`Удалить «${recipe.name}» из моих блюд?`)) return;
-    await api.deleteRecipe(recipe.id).catch(() => undefined);
-    haptic("light");
-    reload();
+    setBusy(true);
+    try { await api.deleteRecipe(recipe.id); setDeleting(null); haptic("light"); reload(); }
+    catch { setToast("Не удалось удалить блюдо. Попробуй ещё раз."); }
+    finally { setBusy(false); }
   }
 
   if (recipes === null) {
     return (
       <div className="screen center">
-        <div className="spinner" />
+        {error ? <><p role="alert">{error}</p><button className="chip mt" onClick={() => reload()}>Повторить</button></> : <div className="spinner" />}
       </div>
     );
   }
@@ -70,7 +75,15 @@ export function Recipes() {
   return (
     <div className="screen">
       <h1>Мои блюда</h1>
-      {toast && <p className="hint small mb">{toast}</p>}
+      <p className="hint screen-intro">Любимые блюда — в дневник без повторного распознавания</p>
+      {error && <div className="card" role="alert"><p>{error}</p><button className="chip mt" onClick={() => reload()}>Повторить</button></div>}
+      {toast && <p role="status" className="card">{toast}</p>}
+      {editing && <form className="card" onSubmit={e => { e.preventDefault(); void rename(editing); }}>
+        <label className="field"><span>Название блюда</span><input type="text" autoFocus maxLength={100} value={name} onChange={e => setName(e.target.value)} /></label>
+        <div className="row"><button className="btn" disabled={busy || !name.trim()}>Сохранить</button><button type="button" className="chip" disabled={busy} onClick={() => setEditing(null)}>Отмена</button></div>
+      </form>}
+      {deleting && <section className="card" aria-label="Подтверждение удаления"><h2>Удалить «{deleting.name}»?</h2><p className="hint mb">Блюдо исчезнет из сохранённых. Записи в дневнике останутся.</p><div className="row"><button className="chip" disabled={busy} onClick={() => setDeleting(null)}>Отмена</button><button className="btn danger" disabled={busy} onClick={() => void remove(deleting)}>Удалить</button></div></section>}
+
 
       {recipes.length === 0 ? (
         <div className="card">
@@ -108,10 +121,10 @@ export function Recipes() {
                   <button className="chip" onClick={() => setOpen(null)}>
                     Отмена
                   </button>
-                  <button className="chip" onClick={() => void rename(r)}>
+                  <button className="chip" onClick={() => { setEditing(r); setName(r.name); setDeleting(null); window.scrollTo(0, 0); }}>
                     Переименовать
                   </button>
-                  <button className="chip" onClick={() => void remove(r)}>
+                  <button className="chip" onClick={() => { setDeleting(r); setEditing(null); window.scrollTo(0, 0); }}>
                     Удалить
                   </button>
                 </div>
