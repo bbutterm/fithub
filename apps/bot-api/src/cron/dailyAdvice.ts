@@ -8,6 +8,7 @@ import { formatProfileBlock, formatStatsBlock, formatYesterdayBlock, getDailySta
 import { getPlan } from "../services/subscription.js";
 import { addDays, localDateStr, localTimeStr } from "../utils/tz.js";
 import { chunk } from "./schedule.js";
+import { toTelegramHtml } from "../utils/modelText.js";
 
 // Free-тариф: укороченный совет 2 раза в неделю (понедельник и четверг)
 const FREE_ADVICE_WEEKDAYS = new Set(["Mon", "Thu"]);
@@ -92,7 +93,7 @@ async function sendDailyAdvice(profile: Profile & { user: User }, now: Date): Pr
     }
   });
   const suffix = plan === "free" ? "\n\n💡 С Pro такие советы приходят каждый день." : "";
-  await bot.api.sendMessage(Number(user.tgUserId), `🥗 Совет дня\n\n${text}${suffix}`);
+  await bot.api.sendMessage(Number(user.tgUserId), `🥗 Совет дня\n\n${toTelegramHtml(text)}${suffix}`, { parse_mode: "HTML" });
   logger.info({ userId: user.id, plan }, "daily advice sent");
 }
 

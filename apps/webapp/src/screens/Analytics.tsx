@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { RichText } from "../components/RichText";
 import { api, ApiError } from "../api";
 import type { AnalyticsResponse } from "../types";
 import { BarChart } from "../components/BarChart";
@@ -74,7 +75,7 @@ export function Analytics({ plan, onGoPro }: Props) {
             <div className="card">
               <h2>Инсайты месяца</h2>
               <p className="hint small mb">{data.monthlyInsight.date.slice(0, 7)}</p>
-              <p style={{ whiteSpace: "pre-wrap" }}>{data.monthlyInsight.text}</p>
+              <RichText text={data.monthlyInsight.text} />
             </div>
           )}
         </>

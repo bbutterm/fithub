@@ -8,6 +8,7 @@ import { formatProfileBlock, getDailyStats, type DayStat } from "../services/sta
 import { getPlan } from "../services/subscription.js";
 import { localDateStr } from "../utils/tz.js";
 import { chunk, shouldSendMonthly } from "./schedule.js";
+import { toTelegramHtml } from "../utils/modelText.js";
 
 function prevMonthRange(todayLocal: string): { monthKey: string; start: string; end: string; days: number; label: string } {
   const [y, m] = todayLocal.split("-").map(Number) as [number, number, ...number[]];
@@ -100,7 +101,7 @@ async function sendMonthlyReport(profile: Profile & { user: User }, now: Date): 
   await prisma.dailyAdvice.create({
     data: { userId: user.id, date: range.monthKey, kind: "monthly", adviceText: text, statsJson: JSON.parse(JSON.stringify(stats)) }
   });
-  await bot.api.sendMessage(Number(user.tgUserId), `📈 Отчёт за ${range.label}\n\n${text}`);
+  await bot.api.sendMessage(Number(user.tgUserId), `📈 Отчёт за ${range.label}\n\n${toTelegramHtml(text)}`, { parse_mode: "HTML" });
   logger.info({ userId: user.id, month: range.monthKey }, "monthly report sent");
 }
 
