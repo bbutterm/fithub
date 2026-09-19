@@ -11,12 +11,12 @@ datasource db {
 }
 
 model User {
-  id                 Int            @id @default(autoincrement())
-  tgUserId           BigInt         @unique
+  id                 Int                    @id @default(autoincrement())
+  tgUserId           BigInt                 @unique
   firstName          String?
   username           String?
-  tz                 String         @default("Europe/Moscow")
-  createdAt          DateTime       @default(now())
+  tz                 String                 @default("Europe/Moscow")
+  createdAt          DateTime               @default(now())
   dailyLimitOverride Int? // персональный лимит распознаваний/день для free (админка)
   lastReminderDate   String? // локальная дата последнего вечернего напоминания — защита от дублей
   profile            Profile?
@@ -27,6 +27,8 @@ model User {
   aiUsage            AiUsage[]
   recipes            Recipe[]
   quickChecks        QuickCheck[]
+  feedVotes          FeedVote[]
+  feedReports        FeedReport[]
   ownedChallenges    Challenge[]            @relation("ChallengeOwner")
   challenges         ChallengeParticipant[]
 }
@@ -81,32 +83,33 @@ enum AdviceTone {
 }
 
 model Profile {
-  userId        Int           @id
-  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  gender        Gender        @default(male)
-  birthYear     Int?
-  heightCm      Int?
-  weightKg      Float?
-  activityLevel ActivityLevel @default(moderate)
-  goal          Goal          @default(maintain)
-  dietType      DietType      @default(none)
-  allergies     String[]      @default([])
-  dislikes      String[]      @default([])
+  userId          Int           @id
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gender          Gender        @default(male)
+  birthYear       Int?
+  heightCm        Int?
+  weightKg        Float?
+  activityLevel   ActivityLevel @default(moderate)
+  goal            Goal          @default(maintain)
+  dietType        DietType      @default(none)
+  allergies       String[]      @default([])
+  dislikes        String[]      @default([])
   // Лечебные и лечебно-профилактические режимы питания (идентификаторы из src/diets.ts).
   // Массив, а не enum: режимы сочетаются — «стол №5» и «средиземноморская» вместе
   // это обычное назначение, а не противоречие.
-  medicalDiets  String[]      @default([])
+  medicalDiets    String[]      @default([])
   // Ограничения своими словами: то, что не покрыто ни одним готовым режимом.
-  dietNotes     String?
-  targetKcal    Int?
-  targetProtein Int?
-  targetFat     Int?
-  targetCarbs   Int?
-  adviceTone    AdviceTone    @default(friendly)
-  adviceTime    String        @default("09:00")
-  adviceEnabled Boolean       @default(true)
-  reminderEnabled Boolean     @default(true) // вечернее «сегодня в дневнике пусто»
-  updatedAt     DateTime      @updatedAt
+  dietNotes       String?
+  targetKcal      Int?
+  targetProtein   Int?
+  targetFat       Int?
+  targetCarbs     Int?
+  adviceTone      AdviceTone    @default(friendly)
+  adviceTime      String        @default("09:00")
+  adviceEnabled   Boolean       @default(true)
+  reminderEnabled Boolean       @default(true) // вечернее «сегодня в дневнике пусто»
+  feedOptIn       Boolean       @default(false) // публиковать новые приёмы с фото в общую ленту
+  updatedAt       DateTime      @updatedAt
 }
 
 enum MealSource {
@@ -135,9 +138,20 @@ model Meal {
   dietVerdict       String? // ok | caution | avoid
   overallConfidence Float?
   source            MealSource
-  items             MealItem[]
+
+  // --- Общая лента («еда-тиндер») ---
+  isPublic     Boolean   @default(false)
+  publishedAt  DateTime?
+  feedHiddenAt DateTime? // скрыт модерацией по жалобам
+  likeCount    Int       @default(0) // денормализовано: лента читается на каждом свайпе, голосуют реже
+  voteCount    Int       @default(0)
+
+  items       MealItem[]
+  feedVotes   FeedVote[]
+  feedReports FeedReport[]
 
   @@index([userId, eatenAt])
+  @@index([isPublic, feedHiddenAt, voteCount])
 }
 
 model MealItem {
@@ -286,7 +300,7 @@ model UsageCounter {
 /// НЕ записывал в дневник. Хранится, чтобы кнопка «Записать» под ответом могла
 /// создать приём без повторного платного распознавания.
 model QuickCheck {
-  id               Int      @id @default(autoincrement())
+  id               Int        @id @default(autoincrement())
   userId           Int
   recognition      Json
   source           MealSource
@@ -294,10 +308,38 @@ model QuickCheck {
   photoThumbFileId String?
   dietNote         String?
   dietVerdict      String?
-  createdAt        DateTime @default(now())
+  createdAt        DateTime   @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
   @@index([createdAt])
+}
+
+/// Голос в общей ленте: один пользователь — один голос за приём пищи.
+/// Скип (liked=false) хранится тоже: иначе карточка вернётся на следующем экране.
+model FeedVote {
+  mealId    Int
+  voterId   Int
+  liked     Boolean
+  createdAt DateTime @default(now())
+
+  meal  Meal @relation(fields: [mealId], references: [id], onDelete: Cascade)
+  voter User @relation(fields: [voterId], references: [id], onDelete: Cascade)
+
+  @@id([mealId, voterId])
+  @@index([voterId, createdAt])
+  @@index([createdAt, liked])
+}
+
+/// Жалоба на фото в ленте. Две жалобы прячут карточку до разбора.
+model FeedReport {
+  mealId     Int
+  reporterId Int
+  createdAt  DateTime @default(now())
+
+  meal     Meal @relation(fields: [mealId], references: [id], onDelete: Cascade)
+  reporter User @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+
+  @@id([mealId, reporterId])
 }

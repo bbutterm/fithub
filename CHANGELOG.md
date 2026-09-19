@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Food feed — data layer
+
+- Added the data model for the shared food feed: opt-in publication per meal (`Meal.isPublic`), an auto-publish toggle (`Profile.feedOptIn`, off by default), per-viewer votes (`FeedVote`), reports (`FeedReport`) and denormalised like/vote counters.
+- Added `services/feed.ts`: publish/unpublish, swipe queue (own, unpublished, hidden and already-voted meals excluded), idempotent voting, report-based hiding after two distinct reports, weekly leaderboard with shared Moscow week and tie-aware ranks, top meals of the week and per-user feed stats.
+- Nothing is published without an explicit action: no existing meal becomes public by this change.
+- Rules that decide ordering, week boundaries and ranks live in `src/feed.ts` and are unit-tested; `scripts/smoke-feed.ts` exercises the service against a real database.
+
 ### Retention: «можно?», actionable advice, evening reminder
 
 - Added quick-check mode: a photo captioned «можно?» (or a question like «можно мне жареную картошку?») is recognised and checked against the user's diet without writing to the diary; a button logs it afterwards without a second model call.
