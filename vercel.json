@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "pnpm install",
-  "buildCommand": "pnpm --filter bot-api prisma:deploy && pnpm --filter bot-api prisma:generate && pnpm --filter webapp build",
+  "buildCommand": "([ \"$VERCEL_ENV\" != production ] || pnpm --filter bot-api prisma:deploy) && pnpm --filter bot-api prisma:generate && pnpm --filter webapp build",
   "ignoreCommand": "exit 1",
   "outputDirectory": "apps/webapp/dist",
   "regions": [
