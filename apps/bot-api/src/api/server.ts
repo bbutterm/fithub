@@ -61,6 +61,7 @@ const profileBodySchema = z.object({
   adviceTone: z.enum(["strict", "friendly", "scientific"]).default("friendly"),
   adviceTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default("09:00"),
   adviceEnabled: z.boolean().default(true),
+  reminderEnabled: z.boolean().default(true),
   tz: z.string().max(64).optional(),
   // Ручные цели: если заданы — имеют приоритет над расчётом
   targetKcal: z.number().int().min(800).max(10000).nullable().optional(),
@@ -248,10 +249,14 @@ export async function buildServer() {
     await ensureWebhook().catch((err) => logger.warn({ err: String(err) }, "webhook self-heal failed"));
     const { runDailyAdviceTick } = await import("../cron/dailyAdvice.js");
     const { runChallengeSummaryTick } = await import("../cron/challengeSummary.js");
-    // Бюджеты заданы явно: у функции Vercel 60 секунд на всё, а тиков здесь два.
-    // Своими значениями по умолчанию (45 + 20) они бы вместе не уложились.
-    await runDailyAdviceTick(new Date(), 30_000);
-    await runChallengeSummaryTick(new Date(), 20_000);
+    const { runReminderTick } = await import("../cron/reminders.js");
+    const { purgeOldQuickChecks } = await import("../services/quickCheck.js");
+    // Бюджеты заданы явно: у функции Vercel 60 секунд на всё, а тиков здесь три.
+    // Своими значениями по умолчанию они бы вместе не уложились.
+    await runDailyAdviceTick(new Date(), 28_000);
+    await runChallengeSummaryTick(new Date(), 18_000);
+    await runReminderTick(new Date(), 8_000);
+    await purgeOldQuickChecks();
     return { ok: true };
   });
   app.get("/api/cron/monthly", { preHandler: cronAuth }, async () => {
@@ -577,6 +582,7 @@ export async function buildServer() {
       adviceTone: b.adviceTone,
       adviceTime: b.adviceTime,
       adviceEnabled: b.adviceEnabled,
+      reminderEnabled: b.reminderEnabled,
       ...targets
     };
     const profile = await prisma.profile.upsert({

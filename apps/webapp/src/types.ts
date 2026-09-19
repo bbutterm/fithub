@@ -50,6 +50,7 @@ export interface Profile {
   adviceTone: "strict" | "friendly" | "scientific";
   adviceTime: string;
   adviceEnabled: boolean;
+  reminderEnabled: boolean;
 }
 
 export interface MeResponse {

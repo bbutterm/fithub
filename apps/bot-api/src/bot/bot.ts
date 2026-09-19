@@ -32,7 +32,13 @@ import { acquireRecognitionLock, releaseRecognitionLock } from "../services/lock
 import { calcStreak, getDailyStats } from "../services/stats.js";
 import { deleteAccount, summarizeAccount, upsertUserFromTelegram } from "../services/users.js";
 import { addDays, localDateStr, zonedTimeToUtc } from "../utils/tz.js";
-import { formatDaySummary, formatMealCard } from "./cards.js";
+import { formatCheckCard, formatDaySummary, formatMealCard } from "./cards.js";
+import { detectCheckIntent } from "./checkIntent.js";
+import { nextStepHint } from "../services/nextStep.js";
+import { checkMealAgainstDiet } from "../ai/dietCheck.js";
+import { logQuickCheck, saveQuickCheck, usualDayEstimate } from "../services/quickCheck.js";
+import { sumItems } from "../services/nutrition.js";
+import { REMINDER_TEXT } from "./reminderCard.js";
 import { checkRateLimit } from "./queue.js";
 import { paywallKeyboard, PURCHASES_UNAVAILABLE_TEXT, registerPaymentHandlers } from "./payments.js";
 
@@ -130,12 +136,23 @@ async function renderMealCard(
     getDailyStats(userId, tz, 14)
   ]);
   const checked = opts.checkDiet ? await applyDietCheck(meal, profile) : meal;
+  const hourLocal = Number(new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", hour12: false }).format(new Date())) % 24;
   return formatMealCard({
     meal: checked,
     dayKcal: day.totals.totalKcal,
     targetKcal: profile?.targetKcal ?? null,
     streak: calcStreak(weekStats),
-    tz
+    tz,
+    nextStep: profile
+      ? nextStepHint({
+          hourLocal,
+          dayKcal: day.totals.totalKcal,
+          dayProtein: day.totals.totalProtein,
+          targetKcal: profile.targetKcal,
+          targetProtein: profile.targetProtein,
+          dietType: profile.dietType
+        })
+      : null
   });
 }
 
@@ -189,6 +206,7 @@ const START_TEXT = [
   "✏️ Ошибся в распознавании? Ответь на карточку уточнением — пересчитаю.",
   "💾 Ешь одно и то же? Сохрани блюдо кнопкой под карточкой — потом запишется одним тапом.",
   "Можно текстом или голосовым 🎙: «тарелка борща и два куска хлеба».",
+  "❓ Сомневаешься, можно ли тебе это? Подпиши фото «можно?» — сверю с твоим режимом питания и в дневник записывать не буду.",
   "",
   "Команды:",
   "/day — сводка за сегодня",
@@ -260,6 +278,99 @@ async function handleRecognition(params: {
           : "Не получилось распознать 😔 Попробуй ещё раз через минуту.";
     if (!(err instanceof NoFoodError)) logger.error({ err: String(err), userId: user.id }, "recognition failed");
     // Еда не распознана или провайдер не ответил — попытка не должна сгорать
+    await refundRecognition(user);
+    await ctx.api.editMessageText(ctx.chat.id, status.message_id, message).catch(() => undefined);
+  } finally {
+    await releaseRecognitionLock(user.id);
+  }
+}
+
+function checkKeyboard(checkId: number): InlineKeyboard {
+  return new InlineKeyboard().text("📝 Всё-таки записать", `chk:log:${checkId}`);
+}
+
+/**
+ * Режим «можно?»: распознать еду и сверить с режимом питания, НЕ записывая в дневник.
+ *
+ * Тот же платный вызов модели, что и при записи, поэтому лимиты и блокировки те
+ * же. Отличие одно: вместо приёма пищи сохраняется проверка, а под ответом
+ * кнопка «записать» — на случай, если человек всё же это съел.
+ */
+async function handleQuickCheck(params: {
+  ctx: Context;
+  recognize: (userId: number) => Promise<FoodRecognition>;
+  source: "photo" | "text";
+  photoFileId?: string;
+  photoThumbFileId?: string;
+}): Promise<void> {
+  const { ctx } = params;
+  if (!ctx.from || !ctx.chat) return;
+  const user = await upsertUserFromTelegram(ctx.from);
+
+  if (!checkRateLimit(user.id) || !(await checkBurstLimit(user.id))) {
+    await ctx.reply("Слишком много запросов подряд 🙈 Подожди минутку и пришли снова.");
+    return;
+  }
+  const limit = await tryConsumeRecognition(user);
+  if (!limit.allowed) {
+    await ctx.reply(limitReachedText(limit.limit ?? config.FREE_PHOTOS_PER_DAY), {
+      parse_mode: "HTML",
+      reply_markup: paywallKeyboard()
+    });
+    return;
+  }
+  if (!(await acquireRecognitionLock(user.id))) {
+    await refundRecognition(user);
+    await ctx.reply("Я ещё разбираю предыдущую еду — секунду 🙏");
+    return;
+  }
+
+  const status = await ctx.reply("Смотрю, что это и можно ли тебе… 🔎");
+  try {
+    const recognition = await Promise.race([
+      params.recognize(user.id),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new RecognitionTimeoutError()), 45_000))
+    ]);
+    if (recognition.items.length === 0) throw new NoFoodError();
+
+    const profile = await prisma.profile.findUnique({ where: { userId: user.id } });
+    const hasDiet = Boolean(profile && (profile.medicalDiets.length > 0 || profile.dietNotes?.trim() || profile.allergies.length > 0));
+    const verdict = await checkMealAgainstDiet({
+      dishes: recognition.items.map((i) => `${i.dish} — ${Math.round(i.grams)} г`),
+      profile,
+      userId: user.id
+    });
+    const checkId = await saveQuickCheck({
+      userId: user.id,
+      recognition,
+      source: params.source,
+      photoFileId: params.photoFileId,
+      photoThumbFileId: params.photoThumbFileId,
+      dietNote: verdict?.note ?? null,
+      dietVerdict: verdict?.verdict ?? null
+    });
+    const text = formatCheckCard({
+      items: recognition.items,
+      totals: sumItems(recognition.items),
+      dietNote: verdict?.note ?? null,
+      dietVerdict: verdict?.verdict ?? null,
+      hasDiet,
+      comment: recognition.comment
+    });
+    await ctx.api.editMessageText(ctx.chat.id, status.message_id, text, {
+      parse_mode: "HTML",
+      reply_markup: checkKeyboard(checkId)
+    });
+  } catch (err) {
+    const message =
+      err instanceof NoFoodError
+        ? params.source === "photo"
+          ? "Хм, не вижу еды на этом фото 🤔 Попробуй сфотографировать ближе и при хорошем свете."
+          : "Не понял, о какой еде речь 🤔 Напиши конкретнее: «можно мне жареную картошку?»."
+        : err instanceof RecognitionTimeoutError
+          ? "Слишком долго думаю 😅 Пришли ещё раз — обычно со второго раза быстрее."
+          : "Не получилось проверить 😔 Попробуй ещё раз через минуту.";
+    if (!(err instanceof NoFoodError)) logger.error({ err: String(err), userId: user.id }, "quick check failed");
     await refundRecognition(user);
     await ctx.api.editMessageText(ctx.chat.id, status.message_id, message).catch(() => undefined);
   } finally {
@@ -686,6 +797,90 @@ bot.callbackQuery(/^meal:ts:(\d+):(m\d+|p\d{2}:\d{2})$/, async (ctx) => {
   if (messageId) await redrawMealCard(ctx, user.id, mealId, messageId);
 });
 
+// Проверка «можно?» → всё-таки записать в дневник (без повторного распознавания)
+bot.callbackQuery(/^chk:log:(\d+)$/, async (ctx) => {
+  if (!ctx.from || !ctx.chat) return;
+  const user = await upsertUserFromTelegram(ctx.from);
+  const meal = await logQuickCheck(Number(ctx.match[1]), user.id);
+  if (!meal) {
+    await ctx.answerCallbackQuery({ text: "Эта проверка устарела — пришли фото ещё раз", show_alert: true });
+    await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => undefined);
+    return;
+  }
+  await ctx.answerCallbackQuery({ text: "Записал ✅" });
+  const messageId = ctx.callbackQuery.message?.message_id;
+  if (!messageId) return;
+  const text = await renderMealCard(user.id, user.tz, meal, { checkDiet: false });
+  await ctx.api
+    .editMessageText(ctx.chat.id, messageId, text, { parse_mode: "HTML", reply_markup: mealKeyboard(meal.id) })
+    .catch(() => undefined);
+  await prisma.meal.update({ where: { id: meal.id }, data: { tgMessageId: BigInt(messageId) } }).catch(() => undefined);
+});
+
+// Вечернее напоминание: «ел как обычно» — запись по среднему за прошлые дни
+bot.callbackQuery("rem:usual", async (ctx) => {
+  if (!ctx.from || !ctx.chat) return;
+  const user = await upsertUserFromTelegram(ctx.from);
+  const today = localDateStr(user.tz);
+  const { meals } = await getDay(user.id, today, user.tz);
+  if (meals.length > 0) {
+    await ctx.answerCallbackQuery({ text: "Сегодня уже есть записи 🙂" });
+    await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => undefined);
+    return;
+  }
+  const usual = await usualDayEstimate(user.id, user.tz);
+  if (!usual) {
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(
+      `${REMINDER_TEXT}\n\n🤷 Пока не знаю, что для тебя «обычно»: нужно хотя бы два дня с записями. Опиши сегодняшнюю еду текстом одной строкой — этого хватит.`
+    ).catch(() => undefined);
+    return;
+  }
+  const meal = await createMealFromRecognition({
+    userId: user.id,
+    source: "manual",
+    // Полдень, а не момент нажатия: иначе каждый такой день выглядел бы как поздний ужин
+    eatenAt: zonedTimeToUtc(today, "13:00", user.tz),
+    recognition: {
+      items: [
+        {
+          dish: `Обычный день (≈ среднее за ${usual.days} дн.)`,
+          grams: 0,
+          kcal: usual.kcal,
+          protein: usual.protein,
+          fat: usual.fat,
+          carbs: usual.carbs,
+          confidence: 0.5
+        }
+      ],
+      comment: "Записано по среднему за твои прошлые дни. Если сегодня было иначе — ответь на это сообщение, поправлю.",
+      overall_confidence: 0.5
+    }
+  });
+  await ctx.answerCallbackQuery({ text: "Записал по среднему ✅" });
+  await ctx.editMessageText(`${REMINDER_TEXT}\n\n✅ Записал по среднему.`).catch(() => undefined);
+  const text = await renderMealCard(user.id, user.tz, meal, { checkDiet: false });
+  const sent = await ctx.reply(text, { parse_mode: "HTML", reply_markup: mealKeyboard(meal.id) });
+  await prisma.meal.update({ where: { id: meal.id }, data: { tgMessageId: BigInt(sent.message_id) } }).catch(() => undefined);
+});
+
+bot.callbackQuery("rem:later", async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Жду 📷" });
+  await ctx.editMessageText(`${REMINDER_TEXT}\n\n📷 Жду фото или пару слов о еде.`).catch(() => undefined);
+});
+
+bot.callbackQuery("rem:off", async (ctx) => {
+  if (!ctx.from) return;
+  const user = await upsertUserFromTelegram(ctx.from);
+  await prisma.profile.upsert({
+    where: { userId: user.id },
+    create: { userId: user.id, reminderEnabled: false },
+    update: { reminderEnabled: false }
+  });
+  await ctx.answerCallbackQuery({ text: "Больше не буду напоминать" });
+  await ctx.editMessageText("🔕 Вечерние напоминания выключены. Включить обратно можно в настройках приложения.").catch(() => undefined);
+});
+
 bot.callbackQuery(/^meal:del:(\d+)$/, async (ctx) => {
   if (!ctx.from) return;
   const user = await upsertUserFromTelegram(ctx.from);
@@ -705,6 +900,19 @@ bot.on("message:photo", async (ctx) => {
   // Маленький размер (~320px) — для быстрых превью в ленте Mini App
   const thumb = photos.find((p) => p.width >= 250 && p.width <= 500) ?? photos[0];
   const { telegramFileToDataUrl } = await import("../services/tgfiles.js");
+  // «можно?» в подписи — вопрос, а не запись: проверяем по режиму, дневник не трогаем
+  const intent = detectCheckIntent(caption);
+  if (intent.check) {
+    await handleQuickCheck({
+      ctx,
+      source: "photo",
+      photoFileId: largest.file_id,
+      photoThumbFileId: thumb?.file_id,
+      recognize: async (userId) =>
+        recognizeFoodPhoto(await telegramFileToDataUrl(largest.file_id), userId, intent.hint ?? undefined)
+    });
+    return;
+  }
   await handleRecognition({
     ctx,
     source: "photo",
@@ -741,7 +949,18 @@ async function routeFoodText(
     orderBy: { eatenAt: "desc" },
     include: { items: true }
   });
-  if (lastMeal && lastMeal.items.length > 0) {
+  const hasRecent = Boolean(lastMeal && lastMeal.items.length > 0);
+
+  // Вопрос «можно мне …?» — проверка без записи. Одного знака «?» рядом с
+  // недавней записью мало: «там точно 300 грамм?» — это уточнение, не вопрос о новой еде.
+  const intent = detectCheckIntent(text);
+  if (intent.check && (intent.strong || !hasRecent)) {
+    const query = intent.hint ?? text;
+    await handleQuickCheck({ ctx, source: "text", recognize: (userId) => recognizeFoodText(query, userId) });
+    return;
+  }
+
+  if (lastMeal && hasRecent) {
     await handleContextualText(ctx, user, lastMeal, text);
     return;
   }

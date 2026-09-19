@@ -18,6 +18,7 @@ model User {
   tz                 String         @default("Europe/Moscow")
   createdAt          DateTime       @default(now())
   dailyLimitOverride Int? // персональный лимит распознаваний/день для free (админка)
+  lastReminderDate   String? // локальная дата последнего вечернего напоминания — защита от дублей
   profile            Profile?
   meals              Meal[]
   advices            DailyAdvice[]
@@ -25,6 +26,7 @@ model User {
   usage              UsageCounter[]
   aiUsage            AiUsage[]
   recipes            Recipe[]
+  quickChecks        QuickCheck[]
   ownedChallenges    Challenge[]            @relation("ChallengeOwner")
   challenges         ChallengeParticipant[]
 }
@@ -103,6 +105,7 @@ model Profile {
   adviceTone    AdviceTone    @default(friendly)
   adviceTime    String        @default("09:00")
   adviceEnabled Boolean       @default(true)
+  reminderEnabled Boolean     @default(true) // вечернее «сегодня в дневнике пусто»
   updatedAt     DateTime      @updatedAt
 }
 
@@ -277,4 +280,24 @@ model UsageCounter {
   photoCount Int    @default(0)
 
   @@id([userId, date])
+}
+
+/// Разовая проверка «можно ли мне это?»: распознанная еда, которую пользователь
+/// НЕ записывал в дневник. Хранится, чтобы кнопка «Записать» под ответом могла
+/// создать приём без повторного платного распознавания.
+model QuickCheck {
+  id               Int      @id @default(autoincrement())
+  userId           Int
+  recognition      Json
+  source           MealSource
+  photoFileId      String?
+  photoThumbFileId String?
+  dietNote         String?
+  dietVerdict      String?
+  createdAt        DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
 }

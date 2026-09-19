@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Retention: «можно?», actionable advice, evening reminder
+
+- Added quick-check mode: a photo captioned «можно?» (or a question like «можно мне жареную картошку?») is recognised and checked against the user's diet without writing to the diary; a button logs it afterwards without a second model call.
+- Meal cards end with one data-driven next step: calorie overshoot for the day, or the protein gap with diet-appropriate sources in the evening.
+- Daily advice must end with a single verifiable action for today («Сегодня: …»).
+- Evening reminder when the day is empty, with «ел как обычно» (logs the user's average day), «сейчас пришлю» and «не напоминать»; toggle in Settings. Sent only to active users, once per day, inside the existing daily cron.
+- Vercel build now runs `prisma migrate deploy` before generating the client, so migrations ship with the deploy.
+
 ### Follow-up review fix
 
 - Guarded challenge eligibility responses against rapid selection changes, cancellation and unmount; stale success/error responses cannot change the new selection.

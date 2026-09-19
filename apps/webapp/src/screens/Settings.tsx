@@ -265,6 +265,10 @@ export function Settings({ profile, onSaved, isAdmin, onOpenAdmin, onOpenSubscri
           <input type="checkbox" checked={p.adviceEnabled} onChange={(e) => upd("adviceEnabled", e.target.checked)} style={{ width: 20, height: 20 }} />
           <span>Присылать советы</span>
         </label>
+        <label className="row" style={{ cursor: "pointer", marginTop: 10 }}>
+          <input type="checkbox" checked={p.reminderEnabled ?? true} onChange={(e) => upd("reminderEnabled", e.target.checked)} style={{ width: 20, height: 20 }} />
+          <span>Напоминать вечером, если день пустой</span>
+        </label>
       </div>
 
       <div className="card">
