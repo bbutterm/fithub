@@ -1,3 +1,9 @@
+<img src="./docs/portfolio-cover.svg" width="900" alt="FitHub — Food diary in Telegram">
+
+**[Open demo](https://fithub-virid.vercel.app)** · **Project documentation**
+
+---
+
 # 🥑 ИИ-нутрициолог — Telegram-бот + Mini App
 
 Пришлите боту фото еды — он распознает блюда, посчитает калории и БЖУ, запишет в дневник и будет присылать персональные советы нутрициолога.
