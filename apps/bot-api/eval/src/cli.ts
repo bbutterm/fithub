@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { callModel } from "./client.js";
@@ -119,6 +119,29 @@ function cmdValidate(): void {
   console.log(`\nПроблем: ${problems.length}`);
   for (const p of problems) console.log(`  строка ${p.row}: ${p.message}`);
   process.exit(1);
+}
+
+// ─── scaffold ───────────────────────────────────────────────────────────────
+function cmdScaffold(): void {
+  const dir = PHOTOS;
+  const files = readdirSync(dir).filter((f) => /\.(jpe?g|png|webp)$/i.test(f)).sort();
+  if (files.length === 0) {
+    console.error(`В ${path.relative(ROOT, dir)} нет фото. Положите снимки туда и повторите.`);
+    process.exit(1);
+  }
+  const header = "file,dish,grams,kcal,protein,fat,carbs,source,tags,holdout";
+  const existing = new Map<string, string>();
+  if (existsSync(LABELS)) {
+    const rows = parseCsv(readFileSync(LABELS, "utf-8"));
+    for (const r of rows.slice(1)) if (r[0]) existing.set(r[0].trim(), r.join(","));
+  }
+  // Уже заполненные строки не трогаем: таблица — результат работы с весами,
+  // и перезаписать её одной командой было бы обиднее всего.
+  const lines = files.map((f) => existing.get(f) ?? `${f},,,,,,,,simple,no`);
+  writeFileSync(LABELS, [header, ...lines].join("\n") + "\n", "utf-8");
+  const added = files.filter((f) => !existing.has(f)).length;
+  console.log(`Таблица ${path.relative(ROOT, LABELS)}: строк ${files.length}, из них новых ${added}.`);
+  console.log("Заполните вес и КБЖУ по весам и упаковкам, затем: pnpm --filter bot-api eval validate");
 }
 
 // ─── prepare ────────────────────────────────────────────────────────────────
@@ -307,6 +330,7 @@ function cmdScore(): void {
 
 // ─── main ───────────────────────────────────────────────────────────────────
 const commands: Record<string, () => void | Promise<void>> = {
+  scaffold: cmdScaffold,
   validate: cmdValidate,
   prepare: cmdPrepare,
   run: cmdRun,
@@ -318,13 +342,14 @@ const command = process.argv[2] ?? "";
 if (!commands[command]) {
   console.log(`Инструменты eval. Команды:
 
+  pnpm eval scaffold                 создать строки таблицы по именам файлов в dataset/photos
   pnpm eval validate                 проверить таблицу эталона и фото
   pnpm eval prepare                  привести фото к одному размеру и качеству
   pnpm eval run [--models a,b]       прогон (перезапускаемый), [--runs 3] [--holdout] [--out путь]
   pnpm eval label [--run папка]      файл для слепой разметки названий блюд
   pnpm eval score [--run папка]      метрики, отсев по порогам, отчёт и промахи с фото
 
-Порядок: validate → prepare → run → label → score.
+Порядок: scaffold → validate → prepare → run → label → score.
 Пороги и список моделей — в eval/config.json.`);
   process.exit(command ? 1 : 0);
 }

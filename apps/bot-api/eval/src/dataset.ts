@@ -89,9 +89,14 @@ export function loadDataset(csvPath: string, photosDir: string): LoadedDataset {
     seen.add(file);
     if (!existsSync(path.join(photosDir, file))) add(`файла ${file} нет в папке с фото`);
 
+    if (!col(r, "dish")) add("не заполнено название блюда");
+
     const nums: Record<string, number> = {};
     for (const key of ["grams", "kcal", "protein", "fat", "carbs"]) {
       const raw = col(r, key).replace(",", ".");
+      // Пустая ячейка — это не ноль, а незаполненная строка: Number("") даёт 0,
+      // и половина таблицы проходила бы проверку как «еда без калорий».
+      if (raw === "") { add(`${key}: не заполнено`); nums[key] = NaN; continue; }
       const v = Number(raw);
       if (!Number.isFinite(v) || v < 0) add(`${key}: «${raw}» — не число`);
       nums[key] = v;
@@ -108,7 +113,7 @@ export function loadDataset(csvPath: string, photosDir: string): LoadedDataset {
     // Сходимость КБЖУ и калорий по Этуотеру: расхождение больше четверти почти
     // всегда означает описку в граммах или в строке таблицы калорийности.
     const byMacros = nums.protein! * 4 + nums.fat! * 9 + nums.carbs! * 4;
-    if (nums.kcal! > 0 && byMacros > 0 && Math.abs(byMacros - nums.kcal!) / nums.kcal! > 0.25) {
+    if (Number.isFinite(byMacros) && nums.kcal! > 0 && byMacros > 0 && Math.abs(byMacros - nums.kcal!) / nums.kcal! > 0.25) {
       add(`ккал (${nums.kcal}) расходится с Б/Ж/У (${Math.round(byMacros)}) больше чем на четверть — проверьте строку`);
     }
 

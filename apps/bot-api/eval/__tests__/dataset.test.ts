@@ -47,6 +47,15 @@ describe("проверка набора", () => {
     expect(text).toContain("не число");
   });
 
+  it("пустые ячейки не проходят как нули", () => {
+    const { csv, photos } = fixture(["a.jpg,,,,,,,,simple,no"]);
+    const { problems } = loadDataset(csv, photos);
+    const text = problems.map((p) => p.message).join(" | ");
+    expect(text).toContain("название блюда");
+    expect(text).toContain("grams: не заполнено");
+    expect(text).toContain("kcal: не заполнено");
+  });
+
   it("расхождение калорий с Б/Ж/У ловится как описка", () => {
     const { csv, photos } = fixture(["a.jpg,каша,200,900,5,5,30,таблица,simple,no"]);
     const { problems } = loadDataset(csv, photos);
