@@ -24,5 +24,9 @@ async function tableNames(): Promise<string[]> {
 beforeEach(async () => {
   const names = await tableNames();
   if (names.length === 0) return;
-  await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${names.join(", ")} RESTART IDENTITY CASCADE`);
+  // Последовательности намеренно НЕ сбрасываем: в боте есть счётчики в памяти
+  // процесса (анти-спам в bot/queue.ts), привязанные к id пользователя. С
+  // перезапуском нумерации каждый тест получал бы id=1 и наследовал чужой
+  // счётчик — тесты начинали падать в зависимости от порядка.
+  await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${names.join(", ")} CASCADE`);
 });

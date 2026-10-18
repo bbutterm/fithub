@@ -1,7 +1,9 @@
+import type * as FoodAi from "../../ai/food.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Update } from "grammy/types";
 import { prisma } from "../../db.js";
 import { bot } from "../../bot/bot.js";
+import { localDateStr } from "../../utils/tz.js";
 import { captureBotApi, callbackUpdate, makeMeal, makeProfile, textUpdate } from "./helpers.js";
 
 const recognized = {
@@ -18,7 +20,7 @@ vi.mock("../../services/tgfiles.js", () => ({
   downloadTelegramFile: vi.fn(async () => ({ buffer: Buffer.from("audio"), contentType: "audio/ogg" }))
 }));
 vi.mock("../../ai/food.js", async (orig) => ({
-  ...(await orig<typeof import("../../ai/food.js")>()),
+  ...(await orig<typeof FoodAi>()),
   recognizeFoodPhoto: vi.fn(async () => recognized),
   recognizeFoodText: vi.fn(async () => recognized),
   transcribeVoice: vi.fn(async () => "тарелка борща"),
@@ -119,6 +121,26 @@ describe("фото еды", () => {
     expect(vi.mocked(recognizeFoodPhoto)).not.toHaveBeenCalled();
     expect(await prisma.meal.count({ where: { userId } })).toBe(0);
     expect(tg.texts()).toContain("лимит");
+  });
+
+  it.each([
+    ["фото", () => photoUpdate()],
+    ["текст", () => textUpdate(CHAT, TG, "овсянка на завтрак")],
+    ["голос", () => voiceUpdate()]
+  ])("исчерпанный лимит объясняется одинаково для %s", async (_label, makeUpdate) => {
+    const user = await existingUser();
+    await prisma.user.update({ where: { id: user.id }, data: { dailyLimitOverride: 7 } });
+    await prisma.usageCounter.create({ data: { userId: user.id, date: localDateStr(user.tz), photoCount: 7 } });
+    tg.clear();
+
+    await bot.handleUpdate(makeUpdate());
+
+    const text = tg.texts();
+    expect(text).toContain("7");
+    expect(text).toContain("завтра");
+    // Пока покупки выключены, текст не должен ничего продавать
+    expect(text).not.toMatch(/безлимит|Stars|купить/i);
+    expect(await prisma.meal.count({ where: { userId } })).toBe(0);
   });
 
   it("подпись «можно?» уводит в проверку без записи", async () => {

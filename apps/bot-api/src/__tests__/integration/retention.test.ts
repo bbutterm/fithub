@@ -1,3 +1,4 @@
+import type * as FoodAi from "../../ai/food.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "../../db.js";
 import { bot } from "../../bot/bot.js";
@@ -7,7 +8,7 @@ import { captureBotApi, callbackUpdate, makeMeal, makeProfile, mskAt, mskDate, t
 // Распознавание и проверка режима питания подменены: тесты про поведение бота,
 // а не про качество модели. Еда одна и та же во всех сценариях.
 vi.mock("../../ai/food.js", async (orig) => ({
-  ...(await orig<typeof import("../../ai/food.js")>()),
+  ...(await orig<typeof FoodAi>()),
   recognizeFoodText: vi.fn(async () => ({
     items: [{ dish: "картофель жареный", grams: 200, kcal: 380, protein: 6, fat: 18, carbs: 48, confidence: 0.8 }],
     overall_confidence: 0.8,

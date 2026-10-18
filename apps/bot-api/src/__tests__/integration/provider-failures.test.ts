@@ -1,3 +1,4 @@
+import type * as FoodAi from "../../ai/food.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Update } from "grammy/types";
 import { prisma } from "../../db.js";
@@ -16,7 +17,7 @@ vi.mock("../../services/tgfiles.js", () => ({
   downloadTelegramFile: vi.fn(async () => ({ buffer: Buffer.from("x"), contentType: "image/jpeg" }))
 }));
 vi.mock("../../ai/food.js", async (orig) => {
-  const actual = await orig<typeof import("../../ai/food.js")>();
+  const actual = await orig<typeof FoodAi>();
   return { ...actual, recognizeFoodPhoto: vi.fn(), interpretUserText: vi.fn(async () => ({ action: "other" as const, items: [] })) };
 });
 vi.mock("../../ai/dietCheck.js", () => ({ checkMealAgainstDiet: vi.fn(async () => null) }));

@@ -1,3 +1,4 @@
+import type * as LibAi from "../../lib/ai.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "../../db.js";
 import { bot } from "../../bot/bot.js";
@@ -9,7 +10,7 @@ import { captureBotApi, makeMeal, makeProfile } from "./helpers.js";
 
 // Совет и отчёт пишет модель — подменяем: проверяем расписание и адресатов.
 vi.mock("../../lib/ai.js", async (orig) => {
-  const actual = await orig<typeof import("../../lib/ai.js")>();
+  const actual = await orig<typeof LibAi>();
   return {
     ...actual,
     textClient: {
