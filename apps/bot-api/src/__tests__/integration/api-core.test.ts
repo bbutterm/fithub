@@ -38,7 +38,12 @@ describe("вход через Telegram", () => {
   });
 
   it("подделанная подпись отклоняется", async () => {
-    const tampered = signInitData({ id: 500100 }).replace(/hash=\w/, "hash=0");
+    // Портим подпись гарантированно: замена первого символа на «0» в одном
+    // случае из шестнадцати попадала в тот же символ, и тест мигал.
+    const signed = signInitData({ id: 500100 });
+    const hash = /hash=([0-9a-f]+)/.exec(signed)![1]!;
+    const broken = (hash[0] === "0" ? "1" : "0") + hash.slice(1);
+    const tampered = signed.replace(`hash=${hash}`, `hash=${broken}`);
     const res = await app.inject({ method: "POST", url: "/api/auth/telegram", payload: { initData: tampered } });
     expect(res.statusCode).toBe(401);
     expect(res.json().error).toBe("invalid_init_data");
