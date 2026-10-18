@@ -15,6 +15,21 @@ import {
 } from "../src/services/feed.js";
 
 const IDS = [90001, 90002, 90003, 90004] as const;
+
+// Время берём от реальных часов, а не от календарной даты: лидерборд считает
+// текущую неделю, а «обычный день» — последние две недели, поэтому скрипт с
+// зашитой датой проходит ровно одну неделю после написания и потом врёт.
+const MSK = "Europe/Moscow"; // с 2014 года без перехода на летнее время, поэтому +03:00 всегда
+const mskDate = (d: Date) =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: MSK, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+/** Понедельник 00:00 МСК текущей недели — независимая от src/feed.ts реализация. */
+function mondayMsk(now: Date): Date {
+  const idx = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    .indexOf(new Intl.DateTimeFormat("en-US", { timeZone: MSK, weekday: "short" }).format(now));
+  const monday = new Date(`${mskDate(now)}T00:00:00+03:00`);
+  monday.setUTCDate(monday.getUTCDate() - (idx < 0 ? 0 : idx));
+  return monday;
+}
 let failures = 0;
 function expect(label: string, ok: boolean, detail = "") {
   console.log(`   ${ok ? "✓" : "✗"} ${label}${detail ? ` — ${detail}` : ""}`);
@@ -38,7 +53,8 @@ async function mkMeal(userId: number, dish: string, kcal: number, withPhoto = tr
 async function main() {
   await prisma.user.deleteMany({ where: { tgUserId: { in: IDS.map((i) => BigInt(i)) } } });
   const [anna, boris, clara] = await Promise.all([mkUser(IDS[0], "Анна"), mkUser(IDS[1], "Борис"), mkUser(IDS[2], "Клара")]);
-  const now = new Date("2026-09-16T09:00:00Z"); // среда, 12:00 МСК
+  const now = new Date();
+  const weekStart = mondayMsk(now);
 
   head("Публикация");
   const borsch = await mkMeal(anna.id, "борщ", 450);
@@ -97,7 +113,7 @@ async function main() {
   await voteFeedMeal(anna.id, kotleta.id, true);
   await voteFeedMeal(clara.id, kotleta.id, true);
   const lb = await weeklyLeaderboard(now, anna.id);
-  expect("неделя с понедельника", lb.weekKey === "2026-09-14", lb.weekKey);
+  expect("неделя считается с понедельника", lb.weekKey === mskDate(weekStart), `${lb.weekKey} vs ${mskDate(weekStart)}`);
   expect("Борис первый (2 лайка), Анна вторая (1)",
     lb.rows.map((r) => `${r.name}:${r.likes}:${r.rank}`).join(" ") === "Борис:2:1 Анна:1:2",
     lb.rows.map((r) => `${r.name}:${r.likes}:${r.rank}`).join(" "));
@@ -105,7 +121,9 @@ async function main() {
   expect("до места выше — 1 лайк", lb.toNextRank === 1, String(lb.toNextRank));
 
   head("Прошлая неделя не засчитывается");
-  await prisma.feedVote.updateMany({ where: { mealId: kotleta.id }, data: { createdAt: new Date("2026-09-10T09:00:00Z") } });
+  // На день раньше начала недели — граница лидерборда проходит ровно здесь
+  const beforeWeek = new Date(weekStart.getTime() - 86_400_000);
+  await prisma.feedVote.updateMany({ where: { mealId: kotleta.id }, data: { createdAt: beforeWeek } });
   const lb2 = await weeklyLeaderboard(now, anna.id);
   expect("старые лайки выпали из таблицы", lb2.rows.map((r) => r.name).join(",") === "Анна", lb2.rows.map((r) => r.name).join(","));
 

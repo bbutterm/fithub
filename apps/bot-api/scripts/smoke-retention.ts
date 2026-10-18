@@ -79,9 +79,13 @@ function show(label: string) {
     if (s.buttons.length) console.log(`   кнопки: ${s.buttons.join(" | ")}`);
   }
 }
-/** 21:00 по Москве заданного дня (UTC 18:00) — час, в который стреляет крон. */
-const mskEvening = (isoDate: string) => new Date(`${isoDate}T18:00:00Z`);
+// Даты берём от реальных часов: «ел как обычно» считает среднее за последние
+// две недели по системному времени, и скрипт с зашитой датой перестаёт
+// проходить через неделю после написания.
 const mskDate = (d: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+/** 21:00 по Москве указанного дня — час, в который стреляет крон. */
+const mskEvening = (isoDate: string) => new Date(`${isoDate}T21:00:00+03:00`);
+const mskDayShift = (d: Date, days: number) => mskDate(new Date(d.getTime() + days * 86_400_000));
 
 async function main() {
   await bot.init();
@@ -128,7 +132,7 @@ async function main() {
 
   // 2. Вечернее напоминание
   await prisma.meal.deleteMany({ where: { userId: user.id } });
-  const now = mskEvening("2026-09-19");
+  const now = mskEvening(mskDate(new Date()));
   const today = mskDate(now);
   await prisma.user.update({ where: { id: user.id }, data: { createdAt: new Date(now.getTime() - 30 * 86_400_000) } });
   sent.length = 0;
@@ -150,11 +154,11 @@ async function main() {
   await runReminderTick(now);
   expect("повторный тик в тот же день — тишина", sent.length === 0);
   sent.length = 0;
-  await runReminderTick(mskEvening("2026-09-20"));
+  await runReminderTick(mskEvening(mskDayShift(now, 1)));
   expect("на следующий день — снова (день опять пуст)", sent.length > 0);
   await prisma.user.update({ where: { id: user.id }, data: { lastReminderDate: null } });
   sent.length = 0;
-  await runReminderTick(new Date("2026-09-19T09:00:00Z"));
+  await runReminderTick(new Date(`${today}T12:00:00+03:00`));
   expect("днём (12:00 МСК) не шлём", sent.length === 0);
 
   sent.length = 0;
