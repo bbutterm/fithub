@@ -3,6 +3,7 @@ import { api } from "../api";
 import type { ChallengesResponse, Feasibility } from "../types";
 import { haptic } from "../telegram";
 import { load, peek } from "../prefetch";
+import { createLatestRequest } from "../lib/latestRequest";
 
 // Пропуск и заморозка выглядят иначе, чем провал: человек должен видеть,
 // что прогресс цел, а не читать ряд одинаковых крестиков.
@@ -20,11 +21,11 @@ export function Challenges() {
   const [check, setCheck] = useState<Feasibility | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const selectionRequest = useRef(0);
-  useEffect(() => () => { selectionRequest.current++; }, []);
+  const selection = useRef(createLatestRequest());
+  useEffect(() => () => selection.current.cancel(), []);
 
   function cancelPick() {
-    selectionRequest.current++;
+    selection.current.cancel();
     setPicked(null);
     setCheck(null);
   }
@@ -37,15 +38,15 @@ export function Challenges() {
   useEffect(() => reload(!peek("challenges")), []);
 
   async function pick(templateId: string) {
-    const request = ++selectionRequest.current;
+    const isCurrent = selection.current.begin();
     setError("");
     setPicked(templateId);
     setCheck(null);
     try {
       const result = await api.challengeFeasibility(templateId);
-      if (request === selectionRequest.current) setCheck(result);
+      if (isCurrent()) setCheck(result);
     } catch {
-      if (request !== selectionRequest.current) return;
+      if (!isCurrent()) return;
       setError("Не удалось проверить историю. Попробуй выбрать челлендж снова.");
       setPicked(null);
       setCheck(null);

@@ -19,7 +19,7 @@ import { isAdminTgId, registerAdminRoutes } from "./admin.js";
 import { registerBenchRoutes } from "./bench.js";
 import { downloadTelegramFile } from "../services/tgfiles.js";
 import { refundRecognition, tryConsumeRecognition } from "../services/limits.js";
-import { localDateStr } from "../utils/tz.js";
+import { isValidTz, localDateStr } from "../utils/tz.js";
 import { DIET_PRESETS, normalizeDiets } from "../diets.js";
 import { deleteRecipe, getRecipeForUser, itemsOf, listRecipes, logRecipe, renameRecipe, saveMealAsRecipe } from "../services/recipes.js";
 import {
@@ -34,7 +34,7 @@ import {
   quitChallenge,
   ruleOf
 } from "../services/challenges.js";
-import { assessFeasibility, CHALLENGE_TEMPLATES, describeRule, getTemplate, withValue } from "../challenges.js";
+import { assessFeasibility, CHALLENGE_TEMPLATES, type ChallengeRule, describeRule, getTemplate, withValue } from "../challenges.js";
 import { bot } from "../bot/bot.js";
 
 declare module "@fastify/jwt" {
@@ -62,7 +62,9 @@ const profileBodySchema = z.object({
   adviceTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default("09:00"),
   adviceEnabled: z.boolean().default(true),
   reminderEnabled: z.boolean().default(true),
-  tz: z.string().max(64).optional(),
+  // Пояс проверяем, а не просто ограничиваем длину: с несуществующим значением
+  // падает любое форматирование даты, и дневник отвечает ошибкой навсегда.
+  tz: z.string().max(64).refine(isValidTz, "unknown_timezone").optional(),
   // Ручные цели: если заданы — имеют приоритет над расчётом
   targetKcal: z.number().int().min(800).max(10000).nullable().optional(),
   targetProtein: z.number().int().min(10).max(500).nullable().optional(),
@@ -495,23 +497,30 @@ export async function buildServer() {
 
   /** Выполнимость шаблона по собственной истории — до старта, а не после провала. */
   app.get("/api/challenges/feasibility", { preHandler: authenticate }, async (request, reply) => {
-    const q = request.query as { template?: string };
+    const q = request.query as { template?: string; value?: string };
     const template = getTemplate(q.template ?? "");
     if (!template) return reply.code(404).send({ error: "not_found" });
-    const uid = request.user.uid;
+    // Значение учитываем так же, как при создании: иначе проверка отвечает про
+    // планку из шаблона, а человек берёт свою, и «выполнимо» относится не к ней.
+    const value = Number(q.value);
+    const rule = Number.isInteger(value) && value > 0 ? withValue(template.rule, value) : template.rule;
+    return assessChallenge(request.user.uid, rule, template.days);
+  });
+
+  /** Выполнимость правила по записям самого человека — одна реализация на проверку и на создание. */
+  async function assessChallenge(uid: number, rule: ChallengeRule, days: number) {
     const user = await prisma.user.findUniqueOrThrow({ where: { id: uid } });
     const [profile, history] = await Promise.all([
       prisma.profile.findUnique({ where: { userId: uid } }),
       historyFacts(uid, user.tz)
     ]);
-    const check = assessFeasibility({
-      rule: template.rule,
-      days: template.days,
+    return assessFeasibility({
+      rule,
+      days,
       history,
       profile: profile ? { weightKg: profile.weightKg, gender: profile.gender, targetKcal: profile.targetKcal } : null
     });
-    return check;
-  });
+  }
 
   app.post("/api/challenges", { preHandler: authenticate }, async (request, reply) => {
     const body = z
@@ -524,8 +533,16 @@ export async function buildServer() {
     // Один активный челлендж: три сразу — это ноль выполненных
     if (await activeChallengeOf(uid)) return reply.code(409).send({ error: "already_active" });
 
-    const user = await prisma.user.findUniqueOrThrow({ where: { id: uid } });
     const rule = body.data.value ? withValue(template.rule, body.data.value) : template.rule;
+    // Заведомо невыполнимую планку не заводим. В интерфейсе её и не предложат,
+    // но маршрут принимает любое число, а челлендж, проваленный на второй день,
+    // отбивает желание начинать следующий.
+    if (body.data.value) {
+      const check = await assessChallenge(uid, rule, template.days);
+      if (check.verdict === "refuse") return reply.code(422).send({ error: "not_feasible", reason: check.reason });
+    }
+
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: uid } });
     const challenge = await createChallenge({
       ownerId: uid,
       title: template.title,

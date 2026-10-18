@@ -5,6 +5,7 @@ import { ProgressRing } from "../components/ProgressRing";
 import { SwipeRow } from "../components/SwipeRow";
 import { MealDetail } from "./MealDetail";
 import { closeToBot, haptic } from "../telegram";
+import { createLatestRequest } from "../lib/latestRequest";
 
 interface Props {
   profile: Profile | null;
@@ -31,14 +32,14 @@ export function Today({ profile, initialMealId, userName }: Props) {
   const [loading, setLoading] = useState(!dayCache.has(todayStr()));
 
   const [error, setError] = useState("");
-  const sequence = useRef(0);
+  const sequence = useRef(createLatestRequest());
   const selectedDate = useRef(date);
   selectedDate.current = date;
 
   const load = useCallback((d: string, silent = false) => {
     // A mutation started on another day must not replace the visible day.
     if (d !== selectedDate.current) return;
-    const seq = ++sequence.current;
+    const isCurrent = sequence.current.begin();
     setError("");
     if (!silent) setLoading(!dayCache.has(d));
     const cached = dayCache.get(d);
@@ -47,13 +48,13 @@ export function Today({ profile, initialMealId, userName }: Props) {
       .day(d)
       .then((res) => {
         dayCache.set(d, res);
-        if (seq === sequence.current) setDay(res);
+        if (isCurrent()) setDay(res);
       })
-      .catch(() => { if (seq === sequence.current) setError("Не удалось обновить дневник. Проверь соединение и повтори."); })
-      .finally(() => { if (seq === sequence.current) setLoading(false); });
+      .catch(() => { if (isCurrent()) setError("Не удалось обновить дневник. Проверь соединение и повтори."); })
+      .finally(() => { if (isCurrent()) setLoading(false); });
   }, []);
 
-  useEffect(() => { load(date); return () => { sequence.current++; }; }, [date, load]);
+  useEffect(() => { load(date); return () => sequence.current.cancel(); }, [date, load]);
 
   // Возврат в приложение (после отправки фото боту) — тихо обновляем день
   useEffect(() => {

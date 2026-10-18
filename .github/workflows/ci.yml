@@ -15,6 +15,23 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+
+    # Тесты, которым нужна настоящая база (маршруты API, сервисы, обработчики
+    # бота), гоняются здесь же: без этого они были бы «зелёными» только на
+    # машине разработчика и расходились бы с кодом незаметно.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fithub_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/fithub_test
+
     steps:
       - uses: actions/checkout@v4
 
@@ -37,6 +54,16 @@ jobs:
       - run: pnpm lint
       - run: pnpm test
 
+      # Интеграционные тесты: схема накатывается на чистую базу сервиса,
+      # дальше каждый тест стартует с пустых таблиц.
+      - name: Интеграционные тесты на настоящей базе
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+          DIRECT_URL: ${{ env.TEST_DATABASE_URL }}
+        run: |
+          pnpm --filter bot-api exec prisma migrate deploy
+          pnpm test:integration
+
       # Сборка Mini App: ловит ошибки, которых нет в typecheck (импорты, ассеты)
       - run: pnpm --filter webapp build
 
@@ -44,7 +71,8 @@ jobs:
       # Ошибка здесь означает, что прод и репозиторий разъедутся при следующем deploy.
       - name: Проверка миграций на чистом PostgreSQL
         run: |
-          docker run -d --name pg -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:17
+          # Порт 5432 уже занят сервисной базой для интеграционных тестов
+          docker run -d --name pg -e POSTGRES_PASSWORD=postgres -p 5440:5432 postgres:17
           for i in $(seq 1 30); do
             docker exec pg pg_isready -U postgres >/dev/null 2>&1 && break
             sleep 1

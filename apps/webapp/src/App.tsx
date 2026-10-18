@@ -7,26 +7,11 @@ import { Today } from "./screens/Today";
 import { Recipes } from "./screens/Recipes";
 import { Challenges } from "./screens/Challenges";
 import { warm } from "./prefetch";
+import { resolveRoute, type Tab } from "./lib/route";
 import { Analytics } from "./screens/Analytics";
 import { Settings } from "./screens/Settings";
 import { Subscription } from "./screens/Subscription";
 import { Admin } from "./screens/Admin";
-
-type Tab = "today" | "recipes" | "challenges" | "analytics" | "settings" | "subscription" | "admin";
-
-function initialRoute(): { tab: Tab; mealId?: number } {
-  const url = new URL(window.location.href);
-  const start = getStartParam() ?? "";
-  const mealParam = url.searchParams.get("meal") ?? (start.startsWith("meal_") ? start.slice(5) : null);
-  if (mealParam && /^\d+$/.test(mealParam)) return { tab: "today", mealId: Number(mealParam) };
-  const screen = url.searchParams.get("screen") ?? start;
-  if (screen === "recipes") return { tab: "recipes" };
-  if (screen === "challenges") return { tab: "challenges" };
-  if (screen === "settings") return { tab: "settings" };
-  if (screen === "subscription") return { tab: "subscription" };
-  if (screen === "analytics") return { tab: "analytics" };
-  return { tab: "today" };
-}
 
 export default function App() {
   const [state, setState] = useState<"loading" | "error" | "onboarding" | "ready">("loading");
@@ -38,7 +23,7 @@ export default function App() {
   // что именно сломалось — пустой initData, отказ сервера или сеть, — было
   // нельзя ни пользователю, ни по логам.
   const [errorDetail, setErrorDetail] = useState("");
-  const [route] = useState(initialRoute);
+  const [route] = useState(() => resolveRoute(window.location.href, getStartParam()));
   const [tab, setTab] = useState<Tab>(route.tab);
 
   useEffect(() => {

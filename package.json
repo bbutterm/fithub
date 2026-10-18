@@ -12,7 +12,8 @@
     "dev:api": "pnpm --filter bot-api dev",
     "dev:webapp": "pnpm --filter webapp dev",
     "prisma:migrate": "pnpm --filter bot-api prisma:migrate",
-    "seed": "pnpm --filter bot-api seed"
+    "seed": "pnpm --filter bot-api seed",
+    "test:integration": "pnpm --filter bot-api test:integration"
   },
   "engines": {
     "node": ">=22"

@@ -266,7 +266,20 @@ async function handleRecognition(params: {
       photoFileId: params.photoFileId,
       photoThumbFileId: params.photoThumbFileId
     });
-    await publishMealCard(ctx, user, meal, status.message_id);
+    // Отрисовка карточки отделена от распознавания: еда уже записана, и сбой
+    // при сборке карточки (недоступная проверка режима, запнувшаяся база) не
+    // должен выглядеть как «не получилось распознать» и возвращать попытку —
+    // запись при этом молча оставалась в дневнике без карточки и без права
+    // поправить её ответом.
+    try {
+      await publishMealCard(ctx, user, meal, status.message_id);
+    } catch (err) {
+      logger.error({ err: String(err), userId: user.id, mealId: meal.id }, "meal card render failed");
+      const totals = `${Math.round(meal.totalKcal)} ккал · Б ${Math.round(meal.totalProtein)} / Ж ${Math.round(meal.totalFat)} / У ${Math.round(meal.totalCarbs)}`;
+      await ctx.api
+        .editMessageText(ctx.chat.id, status.message_id, `Записал приём пищи: ${totals}.\nКарточку показать не смог — загляни в дневник.`)
+        .catch(() => undefined);
+    }
   } catch (err) {
     const message =
       err instanceof NoFoodError
