@@ -1,0 +1,26 @@
+{
+  "_комментарий": "Раздел 1 чек-листа: что считается победой. Эти пороги применяет команда score.",
+
+  "models": [
+    "qwen/qwen3-vl-32b-instruct",
+    "qwen/qwen3-vl-235b-a22b-instruct",
+    "google/gemini-2.5-flash-lite",
+    "google/gemini-3.6-flash"
+  ],
+  "baseline": "qwen/qwen3-vl-32b-instruct",
+
+  "runs": 3,
+  "temperature": 0,
+  "concurrency": 2,
+  "timeoutSec": 60,
+  "networkRetries": 2,
+
+  "image": { "maxSide": 1024, "quality": 80 },
+
+  "thresholds": {
+    "kcalErrorPctMean": 20,
+    "costPerPhotoUsd": 0.004,
+    "latencySecP95": 10,
+    "failureRatePct": 5
+  }
+}

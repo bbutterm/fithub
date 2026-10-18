@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Eval toolkit for food recognition models
+
+- Added `apps/bot-api/eval`: a runnable toolkit for comparing vision models on a labelled photo set — dataset validation, image normalisation, a resumable run, blind dish labelling and scoring.
+- The run uses the bot's own prompt and parsing schema (`src/prompts/vision.ts`, the new `src/ai/foodSchema.ts`), a fixed temperature and identical images, so it measures the bot rather than a separate setup. Every call stores the raw answer, latency, tokens, cost and failure kind; network retries are counted apart from model failures.
+- Scoring reports calorie error (mean, median, p90, absolute and signed), portion-weight error separately from macros, per-macro grams, failure rate, run-to-run spread, latency and cost per photo, plus a per-dish-type breakdown and the five worst misses with photos. It also checks that the gap between leaders exceeds run-to-run noise before a winner is declared.
+- Thresholds, model list and run count live in `eval/config.json`; 24 unit tests cover the metrics and the dataset checks. Verified end to end against a stub provider.
+
 ### Tests, cleanup and documentation
 
 - Added 112 integration tests against a real database, wired into CI on a service PostgreSQL: API routes (auth, ownership, validation, admin rights, cron secret), services (limits, locks, subscription, stats), bot flows (photo, voice, corrections, buttons, exhausted limit), retention, feed, timezones and scheduling, and provider failures. Each area gets the normal case, a failure and an edge, rather than a test per line.

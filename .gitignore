@@ -8,3 +8,9 @@ coverage/
 *.tsbuildinfo
 .pnpm-store/
 apps/webapp/dist/
+
+# Набор eval: фото и сырые прогоны не версионируем (личные данные и мегабайты)
+apps/bot-api/eval/dataset/photos/*
+!apps/bot-api/eval/dataset/photos/README.md
+apps/bot-api/eval/dataset/prepared/
+apps/bot-api/eval/runs/

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { foodResponseSchema, type FoodRecognition } from "./foodSchema.js";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
 import {
@@ -11,33 +12,8 @@ import {
 } from "../prompts/vision.js";
 import { AiUnavailableError, textClient, visionClient, type ChatMessage } from "../lib/ai.js";
 
-const foodItemSchema = z.object({
-  dish: z.string().min(1),
-  grams: z.coerce.number().nonnegative(),
-  kcal: z.coerce.number().nonnegative(),
-  protein: z.coerce.number().nonnegative(),
-  fat: z.coerce.number().nonnegative(),
-  carbs: z.coerce.number().nonnegative(),
-  confidence: z.coerce.number().min(0).max(1).default(0.7)
-});
+export { foodItemSchema, foodResponseSchema, type FoodRecognition } from "./foodSchema.js";
 
-export const foodResponseSchema = z.object({
-  observed: z.string().optional(), // «рассуждение» модели: что видно на фото — улучшает точность
-  items: z.array(foodItemSchema).default([]),
-  total: z
-    .object({
-      kcal: z.coerce.number().optional(),
-      protein: z.coerce.number().optional(),
-      fat: z.coerce.number().optional(),
-      carbs: z.coerce.number().optional()
-    })
-    .optional(),
-  comment: z.string().optional(),
-  overall_confidence: z.coerce.number().min(0).max(1).optional(),
-  error: z.string().optional()
-});
-
-export type FoodRecognition = z.infer<typeof foodResponseSchema>;
 
 export class NoFoodError extends Error {
   constructor() {

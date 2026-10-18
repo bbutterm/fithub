@@ -1,0 +1,5 @@
+file,dish,grams,kcal,protein,fat,carbs,source,tags,holdout
+01-apple.jpg,яблоко,180,94,0.5,0.3,24.8,таблица USDA,simple,no
+02-buckwheat-chicken.jpg,гречка с куриной грудкой,320,418,38.0,6.4,52.0,весы + таблица,mixed,no
+03-salad-oil.jpg,овощной салат с маслом,240,196,2.4,16.0,9.6,весы + упаковка масла,hidden,no
+04-cottage-cheese.jpg,творог 5%,150,180,24.0,7.5,3.0,упаковка,simple;small,yes
