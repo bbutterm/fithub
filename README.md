@@ -73,7 +73,8 @@ pnpm dev:webapp             # Mini App на :5173 (прокси /api → :3000)
 Полезное:
 
 ```bash
-pnpm test         # юнит-тесты: initData HMAC, нормы КБЖУ, пересчёт граммов, парсинг JSON, таймзоны
+pnpm test             # юнит-тесты сервера и Mini App (без базы)
+pnpm test:integration # маршруты API, сервисы и обработчики бота на настоящей базе (docs/TESTING.md)
 pnpm typecheck    # строгий TypeScript
 pnpm lint         # ESLint, без any
 SKIP_BOT_LAUNCH=1 pnpm dev:api          # только API, без подключения к Telegram

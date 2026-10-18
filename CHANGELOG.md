@@ -2,12 +2,21 @@
 
 ## Unreleased
 
+### Tests, cleanup and documentation
+
+- Added 112 integration tests against a real database, wired into CI on a service PostgreSQL: API routes (auth, ownership, validation, admin rights, cron secret), services (limits, locks, subscription, stats), bot flows (photo, voice, corrections, buttons, exhausted limit), retention, feed, timezones and scheduling, and provider failures. Each area gets the normal case, a failure and an edge, rather than a test per line.
+- Added the first Mini App tests (16). Two pieces were extracted from components to make them testable: route resolution from URL and start param, and the "latest request wins" rule that was duplicated in two screens.
+- Fixed three defects the tests exposed: a card-rendering failure reported "recognition failed" and refunded the attempt although the meal was already saved; challenge feasibility ignored the chosen value and was never checked on creation, so the API accepted 400 g of protein per day; the profile timezone was stored unvalidated, and any bogus value broke the diary permanently.
+- Split `bot/bot.ts` (1127 lines) into composers per conversation area, with keyboards, meal card and shared texts extracted.
+- Removed three smoke scripts and one that tested React by slicing a .tsx file with regular expressions: their scenarios are ordinary tests now.
+- Added `docs/ARCHITECTURE.md` and `docs/TESTING.md`; refreshed the roadmap in `HANDOFF.md`.
+
 ### Food feed — data layer
 
 - Added the data model for the shared food feed: opt-in publication per meal (`Meal.isPublic`), an auto-publish toggle (`Profile.feedOptIn`, off by default), per-viewer votes (`FeedVote`), reports (`FeedReport`) and denormalised like/vote counters.
 - Added `services/feed.ts`: publish/unpublish, swipe queue (own, unpublished, hidden and already-voted meals excluded), idempotent voting, report-based hiding after two distinct reports, weekly leaderboard with shared Moscow week and tie-aware ranks, top meals of the week and per-user feed stats.
 - Nothing is published without an explicit action: no existing meal becomes public by this change.
-- Rules that decide ordering, week boundaries and ranks live in `src/feed.ts` and are unit-tested; `scripts/smoke-feed.ts` exercises the service against a real database.
+- Rules that decide ordering, week boundaries and ranks live in `src/feed.ts` and are unit-tested; the service itself is covered by integration tests against a real database.
 
 ### Retention: «можно?», actionable advice, evening reminder
 
