@@ -28,11 +28,11 @@ function scored(input: ReportInput): Array<{ m: ModelMetrics; s: ScoreBreakdown 
 /** Сводная таблица: балл по каждому критерию плюс сырые числа за ним. */
 export function metricsTable(input: ReportInput): string {
   const head =
-    "| Модель | Балл | Калории | БЖУ | Вес | Надёжность | Скорость | Цена | ошибка ккал | ошибка БЖУ | ошибка веса | сбои | p95 | $/фото |";
-  const sep = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
+    "| Модель | Балл | Калории | БЖУ | Вес | Надёжность | Скорость | Цена | ошибка ккал | медиана | ошибка БЖУ | ошибка веса | сбои | p95 | $/фото | прогонов |";
+  const sep = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
   const body = scored(input).map(({ m, s }) => {
     const name = m.model === input.baseline ? `${m.model} (текущая)` : m.model;
-    return `| ${name} | **${s.total}** | ${s.kcal} | ${s.macros} | ${s.portion} | ${s.reliability} | ${s.speed} | ${s.price} | ${num(m.kcalErrorPctMean, "%")} | ${num(m.macroErrorPctMean, "%")} | ${num(m.gramsErrorPctMean, "%")} | ${num(m.failureRatePct, "%")} | ${num(m.latencySecP95, " с")} | ${m.costPerPhotoUsd} |`;
+    return `| ${name} | **${s.total}** | ${s.kcal} | ${s.macros} | ${s.portion} | ${s.reliability} | ${s.speed} | ${s.price} | ${num(m.kcalErrorPctMean, "%")} | ${num(m.kcalErrorPctMedian, "%")} | ${num(m.macroErrorPctMean, "%")} | ${num(m.gramsErrorPctMean, "%")} | ${num(m.failureRatePct, "%")} | ${num(m.latencySecP95, " с")} | ${m.costPerPhotoUsd} | ${m.runs} |`;
   });
   return [head, sep, ...body].join("\n");
 }
@@ -159,10 +159,12 @@ export function htmlReport(input: ReportInput): string {
   <td class="total">${bar(s.total)}</td>
   ${CRITERIA.map((c) => `<td>${bar(s[c.key])}</td>`).join("")}
   <td class="raw">${num(m.kcalErrorPctMean, "%")}</td>
+  <td class="raw">${num(m.kcalErrorPctMedian, "%")}</td>
   <td class="raw">${num(m.gramsErrorPctMean, "%")}</td>
   <td class="raw">${num(m.failureRatePct, "%")}</td>
   <td class="raw">${num(m.latencySecP95, " с")}</td>
   <td class="raw">$${m.costPerPhotoUsd}</td>
+  <td class="raw">${m.runs}</td>
 </tr>`;
     })
     .join("\n");
@@ -297,7 +299,7 @@ export function htmlReport(input: ReportInput): string {
   <thead><tr>
     <th></th><th>Модель</th><th>Балл</th>
     ${CRITERIA.map((c) => `<th title="${esc(c.hint)}">${c.title}</th>`).join("")}
-    <th>ошибка ккал</th><th>ошибка веса</th><th>сбои</th><th>p95</th><th>$/фото</th>
+    <th>ошибка ккал</th><th>медиана</th><th>ошибка веса</th><th>сбои</th><th>p95</th><th>$/фото</th><th>прогонов</th>
   </tr></thead>
   <tbody>${overviewRows}</tbody>
 </table>

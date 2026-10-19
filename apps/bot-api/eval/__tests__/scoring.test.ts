@@ -7,7 +7,7 @@ const base = (over: Partial<ModelMetrics> = {}): ModelMetrics => ({
   failureRatePct: 0, networkRetries: 0,
   kcalErrorPctMean: 0, kcalErrorPctMedian: 0, kcalErrorPctP90: 0, kcalErrorAbsMean: 0, kcalBiasPctMean: 0,
   gramsErrorPctMean: 0, macroErrorPctMean: 0, proteinErrorGMean: 0, fatErrorGMean: 0, carbsErrorGMean: 0,
-  runSpreadPctMean: 0, latencySecMean: 1, latencySecP95: 2, costPerPhotoUsd: 0.0003,
+  runSpreadPctMean: 0, runs: 3, latencySecMean: 1, latencySecP95: 2, costPerPhotoUsd: 0.0003,
   ...over
 });
 

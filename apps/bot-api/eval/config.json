@@ -15,7 +15,7 @@
   "baseline": "qwen/qwen3-vl-235b-a22b-instruct",
   "runs": 3,
   "temperature": 0,
-  "concurrency": 6,
+  "concurrency": 4,
   "timeoutSec": 60,
   "networkRetries": 2,
   "image": {

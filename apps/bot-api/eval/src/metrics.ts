@@ -80,6 +80,8 @@ export interface ModelMetrics {
 
   /** Разброс калорий между прогонами одного фото, в процентах от эталона. */
   runSpreadPctMean: number;
+  /** Сколько прогонов сделано по этой модели: в одной таблице их может быть разное число. */
+  runs: number;
 
   latencySecMean: number;
   latencySecP95: number;
@@ -109,6 +111,7 @@ export function summarize(
   verdicts: Map<string, Verdict> = new Map()
 ): ModelMetrics {
   const mine = calls.filter((c) => c.model === model);
+  const runIds = new Set(mine.map((c) => c.run));
   const perPhoto = {
     kcalErr: [] as number[], kcalAbs: [] as number[], bias: [] as number[],
     grams: [] as number[], protein: [] as number[], fat: [] as number[], carbs: [] as number[],
@@ -170,6 +173,7 @@ export function summarize(
     carbsErrorGMean: r1(mean(perPhoto.carbs)),
 
     runSpreadPctMean: r1(mean(perPhoto.spread)),
+    runs: runIds.size,
 
     latencySecMean: r1(mean(mine.map((c) => c.latencyMs)) / 1000),
     latencySecP95: r1(percentile(mine.map((c) => c.latencyMs), 95) / 1000),
