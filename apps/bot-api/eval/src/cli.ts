@@ -455,9 +455,10 @@ function cmdAnalyze(): void {
   const lines: string[] = ["# Разбор прогона", ""];
 
   const volume = Number(arg("photos-per-month") ?? 1000);
+  const records = toRecords(stored);
   const prices = priceFrontier(
     models.map((m) => {
-      const s = summarize(m, stored as unknown as CallRecord[], truths);
+      const s = summarize(m, records, truths);
       return { model: m, costPerPhotoUsd: s.costPerPhotoUsd, errorPct: s.kcalErrorPctMedian };
     }),
     volume
