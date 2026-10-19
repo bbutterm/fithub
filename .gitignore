@@ -14,3 +14,6 @@ apps/bot-api/eval/dataset/photos/*
 !apps/bot-api/eval/dataset/photos/README.md
 apps/bot-api/eval/dataset/prepared/
 apps/bot-api/eval/runs/
+# --out у run резолвится от папки eval, поэтому папка прогона может
+# оказаться на уровень глубже — сырые вызовы не версионируем в любом случае.
+apps/bot-api/eval/**/runs/
