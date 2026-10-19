@@ -3,14 +3,14 @@
   "models": [
     "qwen/qwen3-vl-235b-a22b-instruct",
     "qwen/qwen3-vl-30b-a3b-instruct",
-    "google/gemini-2.5-flash-lite",
-    "google/gemini-3.1-flash-lite",
-    "google/gemini-3.6-flash",
-    "openai/gpt-5-nano",
-    "openai/gpt-5-mini",
+    "qwen/qwen3.8-flash",
+    "qwen/qwen3.7-flash",
+    "moonshotai/kimi-k2.5",
+    "z-ai/glm-4.6v",
     "z-ai/glm-5.3-flash",
-    "anthropic/claude-haiku-5.5",
-    "mistralai/mistral-small-3.2-24b-instruct"
+    "deepseek/deepseek-v4.1-flash",
+    "bytedance-seed/seed-2.0-mini",
+    "google/gemini-3.6-flash"
   ],
   "baseline": "qwen/qwen3-vl-235b-a22b-instruct",
   "runs": 3,
@@ -37,5 +37,5 @@
     "price": 0.075
   },
   "_веса": "Вклад каждого критерия в сводный балл. Сумма приводится к единице, так что менять можно любое значение.",
-  "_модели": "Сверено с живым каталогом OpenRouter 19.10.2026. Прежняя qwen3-vl-32b-instruct из каталога исчезла."
+  "_модели": "Сверено с живым каталогом OpenRouter 19.10.2026. Упор на китайские модели; Gemini оставлен одной строкой как внешняя точка отсчёта."
 }
