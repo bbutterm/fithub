@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { callModel } from "./client.js";
 import { loadDataset, parseCsv, type GroundTruth } from "./dataset.js";
 import { summarize, type CallRecord, type Truth, type Verdict } from "./metrics.js";
+import { bestPairs, calibrate, confidenceSignal, runsBenefit, splitError } from "./analysis.js";
 import { htmlReport, markdownReport } from "./report.js";
 import type { ScoreWeights } from "./scoring.js";
 import { appendCall, doneKeys, readCalls, runDir, writeJson, writeText, type StoredCall } from "./storage.js";
@@ -32,6 +33,24 @@ interface Config {
   image: { maxSide: number; quality: number };
   thresholds: { kcalErrorPctMean: number; costPerPhotoUsd: number; latencySecP95: number; failureRatePct: number };
   weights?: ScoreWeights;
+}
+
+/**
+ * Ключ провайдера: из окружения, иначе из apps/bot-api/.env.
+ *
+ * Файл .env в репозиторий не попадает, и класть ключ туда — обычный способ
+ * работы с ботом. Полноценный разбор dotenv ради одной строки не нужен.
+ */
+function apiKey(): string | undefined {
+  const fromEnv = process.env.VISION_API_KEY ?? process.env.OPENROUTER_API_KEY;
+  if (fromEnv) return fromEnv;
+  const envFile = path.join(path.dirname(ROOT), ".env");
+  if (!existsSync(envFile)) return undefined;
+  for (const line of readFileSync(envFile, "utf-8").split("\n")) {
+    const m = /^\s*(VISION_API_KEY|OPENROUTER_API_KEY)\s*=\s*(.+?)\s*$/.exec(line);
+    if (m) return m[2]!.replace(/^["']|["']$/g, "");
+  }
+  return undefined;
 }
 
 function config(): Config {
@@ -252,9 +271,9 @@ async function cmdPrepare(): Promise<void> {
 // ─── run ────────────────────────────────────────────────────────────────────
 async function cmdRun(): Promise<void> {
   const cfg = config();
-  const apiKey = process.env.VISION_API_KEY ?? process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    console.error("Нет ключа: задайте VISION_API_KEY (или OPENROUTER_API_KEY).");
+  const key = apiKey();
+  if (!key) {
+    console.error("Нет ключа: задайте VISION_API_KEY в окружении или в apps/bot-api/.env");
     process.exit(1);
   }
   const all = dataset();
@@ -295,7 +314,7 @@ async function cmdRun(): Promise<void> {
       const outcome = await callModel({
         model: task.model,
         imagePath: path.join(photos, task.item.file),
-        apiKey,
+        apiKey: key,
         temperature: cfg.temperature,
         timeoutSec: cfg.timeoutSec,
         networkRetries: cfg.networkRetries
@@ -401,6 +420,83 @@ function cmdScore(): void {
   if (verdicts.size === 0) console.log("Разметки названий ещё нет — команда label создаст файл для неё.");
 }
 
+// ─── analyze ────────────────────────────────────────────────────────────────
+/**
+ * Разборы поверх готового прогона: ничего не вызывается заново, деньги не тратятся.
+ */
+function cmdAnalyze(): void {
+  const dir = arg("run") ? resolveRun(arg("run")!) : latestRun();
+  const stored = readCalls(dir);
+  if (stored.length === 0) { console.error("В прогоне нет вызовов."); process.exit(1); }
+  const snapshot = JSON.parse(readFileSync(path.join(dir, "config-snapshot.json"), "utf-8")) as { holdout?: boolean };
+  const truths = toTruths(dataset().filter((i) => i.holdout === Boolean(snapshot.holdout)));
+  const models = [...new Set(stored.map((c) => c.model))];
+
+  const lines: string[] = ["# Разбор прогона", ""];
+
+  lines.push("## Откуда ошибка: вес порции или состав");
+  lines.push("");
+  lines.push("| Модель | Общая ошибка | Ошибка веса | Ошибка состава | Доля веса в ошибке |");
+  lines.push("|---|---|---|---|---|");
+  const splits = models.map((m) => splitError(m, stored, truths)).sort((a, b) => a.totalPct - b.totalPct);
+  for (const s of splits) {
+    lines.push(`| ${s.model} | ${s.totalPct}% | ${s.weightPct}% | ${s.compositionPct}% | ${s.weightSharePct}% |`);
+  }
+  lines.push("");
+  lines.push("Ошибка состава — это то, что останется, если подставить правильный вес. Большая доля веса означает, что боту выгоднее спрашивать граммы, чем менять модель.");
+
+  lines.push("");
+  lines.push("## Поправочный коэффициент");
+  lines.push("");
+  lines.push("| Модель | Множитель | Ошибка до | Ошибка после |");
+  lines.push("|---|---|---|---|");
+  for (const c of models.map((m) => calibrate(m, stored, truths)).sort((a, b) => a.after - b.after)) {
+    lines.push(`| ${c.model} | ×${c.factor} | ${c.before}% | ${c.after}% |`);
+  }
+  lines.push("");
+  lines.push("Если после умножения на константу ошибка заметно падает, модель не врёт случайно, а стабильно смещена — это чинится одной строкой в боте.");
+
+  const benefits = models.map((m) => runsBenefit(m, stored, truths)).filter((b) => b.runs > 1);
+  if (benefits.length) {
+    lines.push("");
+    lines.push("## Стоит ли платить за несколько прогонов");
+    lines.push("");
+    lines.push("| Модель | Один ответ | Медиана прогонов | Прогонов |");
+    lines.push("|---|---|---|---|");
+    for (const b of benefits) lines.push(`| ${b.model} | ${b.single}% | ${b.medianOfRuns}% | ${b.runs} |`);
+  }
+
+  if (models.length > 1) {
+    lines.push("");
+    lines.push("## Пары моделей");
+    lines.push("");
+    lines.push("| Пара | Ошибка пары | Лучшая из двух | Выигрыш | Цена пары |");
+    lines.push("|---|---|---|---|---|");
+    for (const p of bestPairs(models, stored, truths, 5)) {
+      lines.push(`| ${p.models.join(" + ")} | ${p.pairPct}% | ${p.bestSinglePct}% | ${p.gainPct > 0 ? "+" : ""}${p.gainPct} п.п. | $${p.costUsd} |`);
+    }
+    lines.push("");
+    lines.push("Среднее двух ответов иногда точнее одного дорогого. Считается по уже сделанным вызовам, новых денег не требует.");
+  }
+
+  lines.push("");
+  lines.push("## Честна ли модель про свою уверенность");
+  lines.push("");
+  lines.push("| Модель | Доля неуверенных | Ошибка у них | Ошибка у остальных | Переспрос оправдан |");
+  lines.push("|---|---|---|---|---|");
+  for (const c of models.map((m) => confidenceSignal(m, stored, truths))) {
+    lines.push(`| ${c.model} | ${c.belowPct}% | ${c.errorBelow}% | ${c.errorAbove}% | ${c.useful ? "да" : "нет"} |`);
+  }
+  lines.push("");
+  lines.push("Бот переспрашивает дорогой моделью при уверенности ниже 0.7. Если ошибка у неуверенных ответов не выше, этот переспрос только удваивает счёт.");
+  lines.push("");
+
+  const md = lines.join("\n");
+  writeText(dir, "analysis.md", md);
+  console.log(md);
+  console.log(`\nСохранено: ${path.relative(ROOT, path.join(dir, "analysis.md"))}`);
+}
+
 // ─── main ───────────────────────────────────────────────────────────────────
 const commands: Record<string, () => void | Promise<void>> = {
   import: cmdImport,
@@ -409,7 +505,8 @@ const commands: Record<string, () => void | Promise<void>> = {
   prepare: cmdPrepare,
   run: cmdRun,
   label: cmdLabel,
-  score: cmdScore
+  score: cmdScore,
+  analyze: cmdAnalyze
 };
 
 const command = process.argv[2] ?? "";
@@ -422,7 +519,8 @@ if (!commands[command]) {
   pnpm eval prepare                  привести фото к одному размеру и качеству
   pnpm eval run [--models a,b]       прогон (перезапускаемый), [--runs 3] [--holdout] [--out путь]
   pnpm eval label [--run папка]      файл для слепой разметки названий блюд
-  pnpm eval score [--run папка]      метрики, отсев по порогам, отчёт и промахи с фото
+  pnpm eval score [--run папка]      метрики, отсев по порогам, отчёт и страница сравнения
+  pnpm eval analyze [--run папка]    разбор по готовым вызовам: вес против состава, поправка, пары, уверенность
 
 Порядок: scaffold → validate → prepare → run → label → score.
 Пороги и список моделей — в eval/config.json.`);
