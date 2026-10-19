@@ -53,6 +53,8 @@ const REQUIRED = ["file", "dish", "grams", "kcal", "protein", "fat", "carbs", "s
 export interface DatasetProblem {
   row: number;
   message: string;
+  /** Ошибка останавливает прогон, предупреждение — повод перепроверить строку. */
+  severity: "error" | "warning";
 }
 
 export interface LoadedDataset {
@@ -70,12 +72,12 @@ export function loadDataset(csvPath: string, photosDir: string): LoadedDataset {
   const rows = parseCsv(readFileSync(csvPath, "utf-8"));
   const problems: DatasetProblem[] = [];
   const items: GroundTruth[] = [];
-  if (rows.length === 0) return { items, problems: [{ row: 0, message: "таблица пустая" }] };
+  if (rows.length === 0) return { items, problems: [{ row: 0, message: "таблица пустая", severity: "error" }] };
 
   const header = rows[0]!.map((h) => h.trim());
   const missing = REQUIRED.filter((c) => !header.includes(c));
   if (missing.length) {
-    return { items, problems: [{ row: 1, message: `нет колонок: ${missing.join(", ")}` }] };
+    return { items, problems: [{ row: 1, message: `нет колонок: ${missing.join(", ")}`, severity: "error" }] };
   }
   const col = (r: string[], name: string) => (r[header.indexOf(name)] ?? "").trim();
   const seen = new Set<string>();
@@ -83,7 +85,8 @@ export function loadDataset(csvPath: string, photosDir: string): LoadedDataset {
   rows.slice(1).forEach((r, i) => {
     const rowNo = i + 2;
     const file = col(r, "file");
-    const add = (message: string) => problems.push({ row: rowNo, message });
+    const add = (message: string) => problems.push({ row: rowNo, message, severity: "error" });
+    const warn = (message: string) => problems.push({ row: rowNo, message, severity: "warning" });
     if (!file) return add("пустое имя файла");
     if (seen.has(file)) add(`файл ${file} встречается дважды`);
     seen.add(file);
@@ -110,11 +113,15 @@ export function loadDataset(csvPath: string, photosDir: string): LoadedDataset {
     const holdoutRaw = col(r, "holdout").toLowerCase();
     if (!["yes", "no", "да", "нет", ""].includes(holdoutRaw)) add(`holdout: «${holdoutRaw}» — ожидается yes или no`);
 
-    // Сходимость КБЖУ и калорий по Этуотеру: расхождение больше четверти почти
-    // всегда означает описку в граммах или в строке таблицы калорийности.
+    // Сходимость калорий с Б/Ж/У по Этуотеру. Это грубая эвристика, а не
+    // закон: клетчатка, спирт и округления в таблицах дают законные отклонения,
+    // поэтому коридор широкий и замечание не блокирует прогон.
     const byMacros = nums.protein! * 4 + nums.fat! * 9 + nums.carbs! * 4;
-    if (Number.isFinite(byMacros) && nums.kcal! > 0 && byMacros > 0 && Math.abs(byMacros - nums.kcal!) / nums.kcal! > 0.25) {
-      add(`ккал (${nums.kcal}) расходится с Б/Ж/У (${Math.round(byMacros)}) больше чем на четверть — проверьте строку`);
+    if (Number.isFinite(byMacros) && nums.kcal! > 0 && byMacros > 0) {
+      const ratio = nums.kcal! / byMacros;
+      if (ratio < 0.7 || ratio > 1.3) {
+        warn(`ккал (${nums.kcal}) расходится с Б/Ж/У (${Math.round(byMacros)}): отношение ${ratio.toFixed(2)} вне коридора 0.70–1.30`);
+      }
     }
 
     items.push({

@@ -72,6 +72,8 @@ export interface ModelMetrics {
   kcalBiasPctMean: number;
 
   gramsErrorPctMean: number;
+  /** Ошибка по белкам, жирам и углеводам в процентах от эталона — для сводного балла. */
+  macroErrorPctMean: number;
   proteinErrorGMean: number;
   fatErrorGMean: number;
   carbsErrorGMean: number;
@@ -110,7 +112,7 @@ export function summarize(
   const perPhoto = {
     kcalErr: [] as number[], kcalAbs: [] as number[], bias: [] as number[],
     grams: [] as number[], protein: [] as number[], fat: [] as number[], carbs: [] as number[],
-    spread: [] as number[]
+    macroPct: [] as number[], spread: [] as number[]
   };
 
   for (const t of truths) {
@@ -134,6 +136,14 @@ export function summarize(
     if (f.length) perPhoto.fat.push(mean(f.map((v) => Math.abs(v - t.fat))));
     const cb = pick((c) => c.carbs);
     if (cb.length) perPhoto.carbs.push(mean(cb.map((v) => Math.abs(v - t.carbs))));
+
+    // Относительная ошибка по макросам. Нутриент меньше трёх граммов пропускаем:
+    // ошибиться на грамм при эталоне в два — это 50%, хотя для тарелки это ничто.
+    const rel: number[] = [];
+    for (const [got, want] of [[p, t.protein], [f, t.fat], [cb, t.carbs]] as const) {
+      if (got.length && want >= 3) rel.push(mean(got.map((v) => errPct(v, want))));
+    }
+    if (rel.length) perPhoto.macroPct.push(mean(rel));
   }
 
   const failures = mine.filter((c) => !c.ok).length;
@@ -154,6 +164,7 @@ export function summarize(
     kcalBiasPctMean: r1(mean(perPhoto.bias)),
 
     gramsErrorPctMean: r1(mean(perPhoto.grams)),
+    macroErrorPctMean: r1(mean(perPhoto.macroPct)),
     proteinErrorGMean: r1(mean(perPhoto.protein)),
     fatErrorGMean: r1(mean(perPhoto.fat)),
     carbsErrorGMean: r1(mean(perPhoto.carbs)),
@@ -228,4 +239,61 @@ export function byTag(model: string, calls: CallRecord[], truths: Truth[]): Reco
     out[tag] = summarize(model, calls, subset).kcalErrorPctMean;
   }
   return out;
+}
+
+export interface PhotoRow {
+  file: string;
+  tags: string[];
+  truthKcal: number;
+  truthGrams: number;
+  /** Среднее по прогонам; null, если ни один прогон не разобрался. */
+  gotKcal: number | null;
+  gotGrams: number | null;
+  errorPct: number | null;
+  /** Разброс калорий между прогонами в процентах от эталона. */
+  spreadPct: number | null;
+  dishes: string[];
+  failures: number;
+  runs: number;
+  latencySec: number;
+  costUsd: number;
+}
+
+/**
+ * Построчно по фотографиям: то, во что проваливаются из общей таблицы.
+ *
+ * Средние по модели отвечают на вопрос «кто лучше», а этот список — на вопрос
+ * «почему»: видно, какие именно тарелки модель не понимает.
+ */
+export function perPhotoRows(
+  model: string,
+  calls: CallRecord[],
+  truths: Truth[],
+  dishesOf: (file: string, run: number) => string[] = () => []
+): PhotoRow[] {
+  const rows: PhotoRow[] = [];
+  for (const t of truths) {
+    const mine = calls.filter((c) => c.model === model && c.file === t.file);
+    if (mine.length === 0) continue;
+    const ok = mine.filter((c) => c.ok);
+    const kcals = ok.map((c) => c.kcal ?? NaN).filter(Number.isFinite);
+    const gramsList = ok.map((c) => c.grams ?? NaN).filter(Number.isFinite);
+    const gotKcal = kcals.length ? mean(kcals) : null;
+    rows.push({
+      file: t.file,
+      tags: t.tags,
+      truthKcal: t.kcal,
+      truthGrams: t.grams,
+      gotKcal: gotKcal === null ? null : Math.round(gotKcal),
+      gotGrams: gramsList.length ? Math.round(mean(gramsList)) : null,
+      errorPct: gotKcal === null ? null : r1(errPct(gotKcal, t.kcal)),
+      spreadPct: kcals.length > 1 && t.kcal > 0 ? r1(((Math.max(...kcals) - Math.min(...kcals)) / t.kcal) * 100) : null,
+      dishes: ok.length ? dishesOf(t.file, ok[0]!.run) : [],
+      failures: mine.length - ok.length,
+      runs: mine.length,
+      latencySec: r1(mean(mine.map((c) => c.latencyMs)) / 1000),
+      costUsd: Number(mine.reduce((s, c) => s + c.costUsd, 0).toFixed(5))
+    });
+  }
+  return rows.sort((a, b) => (b.errorPct ?? -1) - (a.errorPct ?? -1));
 }

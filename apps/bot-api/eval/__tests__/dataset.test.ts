@@ -56,10 +56,20 @@ describe("проверка набора", () => {
     expect(text).toContain("kcal: не заполнено");
   });
 
-  it("расхождение калорий с Б/Ж/У ловится как описка", () => {
+  it("расхождение калорий с Б/Ж/У — предупреждение, а не блокировка", () => {
     const { csv, photos } = fixture(["a.jpg,каша,200,900,5,5,30,таблица,simple,no"]);
-    const { problems } = loadDataset(csv, photos);
-    expect(problems.some((p) => p.message.includes("расходится"))).toBe(true);
+    const { items, problems } = loadDataset(csv, photos);
+    const about = problems.filter((p) => p.message.includes("расходится"));
+    expect(about).toHaveLength(1);
+    expect(about[0]!.severity).toBe("warning");
+    expect(problems.filter((p) => p.severity === "error")).toEqual([]);
+    expect(items).toHaveLength(1); // строка всё равно попадает в набор
+  });
+
+  it("умеренное расхождение, обычное для таблиц калорийности, не тревожит", () => {
+    // 386 ккал против 491 по Этуотеру: отношение 0.79, внутри коридора
+    const { csv, photos } = fixture(["a.jpg,рагу,300,386,25,20,60,таблица,mixed,no"]);
+    expect(loadDataset(csv, photos).problems).toEqual([]);
   });
 
   it("неизвестная метка типа блюда отвергается, отложенные фото отмечаются", () => {

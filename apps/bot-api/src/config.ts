@@ -21,7 +21,10 @@ const envSchema = z.object({
   // Vision-провайдер — только распознавание фото еды (OpenRouter, Qwen)
   VISION_BASE_URL: z.string().url().default("https://openrouter.ai/api/v1"),
   VISION_API_KEY: z.string().min(5, "VISION_API_KEY обязателен — ключ vision-провайдера, https://openrouter.ai/keys"),
-  VISION_MODEL: z.string().default("qwen/qwen3-vl-32b-instruct"),
+  // Значение по умолчанию держим тем же, что стоит в проде: прежнее
+  // (qwen3-vl-32b-instruct) исчезло из каталога OpenRouter, и свежий деплой
+  // без переменной окружения получал бы 400 на каждое фото.
+  VISION_MODEL: z.string().default("qwen/qwen3-vl-235b-a22b-instruct"),
   VISION_MODEL_FALLBACK: z.string().default("qwen/qwen3-vl-235b-a22b-instruct"),
   // Порог уверенности, ниже которого фото перепроверяется fallback-моделью (0 — никогда, 1 — всегда)
   VISION_FALLBACK_THRESHOLD: z.coerce.number().min(0).max(1).default(0.7),

@@ -30,12 +30,12 @@ const DEFAULT_MODELS = [
   "qwen/qwen2.5-vl-72b-instruct",
   "# бесплатные: денег не стоят, но отвечают медленнее и часто отвечают 429",
   "google/gemma-4-26b-a4b-it:free",
-  "nvidia/nemotron-nano-12b-v2-vl:free",
+  "nvidia/nemotron-3.5-super-vl:free",
   "# дороже — проверяем, окупается ли качеством",
   "google/gemini-3.1-flash-lite",
   "google/gemini-3.5-flash-lite",
   "bytedance-seed/seed-2-1-turbo",
-  "qwen/qwen3-vl-235b-a22b-thinking",
+  "qwen/qwen3-vl-30b-a3b-instruct",
   "google/gemini-3.6-flash"
 ];
 

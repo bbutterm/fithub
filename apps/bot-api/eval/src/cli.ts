@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { callModel } from "./client.js";
 import { loadDataset, parseCsv, type GroundTruth } from "./dataset.js";
 import { summarize, type CallRecord, type Truth, type Verdict } from "./metrics.js";
 import { htmlReport, markdownReport } from "./report.js";
+import type { ScoreWeights } from "./scoring.js";
 import { appendCall, doneKeys, readCalls, runDir, writeJson, writeText, type StoredCall } from "./storage.js";
 
 /**
@@ -30,6 +31,7 @@ interface Config {
   networkRetries: number;
   image: { maxSide: number; quality: number };
   thresholds: { kcalErrorPctMean: number; costPerPhotoUsd: number; latencySecP95: number; failureRatePct: number };
+  weights?: ScoreWeights;
 }
 
 function config(): Config {
@@ -52,8 +54,9 @@ function dataset(): GroundTruth[] {
     process.exit(1);
   }
   const { items, problems } = loadDataset(LABELS, photosDir());
-  if (problems.length) {
-    console.error(`В таблице ${problems.length} проблем — сначала команда validate.`);
+  const errors = problems.filter((p) => p.severity === "error");
+  if (errors.length) {
+    console.error(`В таблице ${errors.length} ошибок — сначала команда validate.`);
     process.exit(1);
   }
   return items;
@@ -110,15 +113,84 @@ function cmdValidate(): void {
   for (const i of items) for (const t of i.tags) byTag.set(t, (byTag.get(t) ?? 0) + 1);
   console.log("По типам: " + [...byTag.entries()].map(([t, n]) => `${t} ${n}`).join(", "));
 
-  if (problems.length === 0) {
-    console.log("\nПроблем нет.");
+  const errors = problems.filter((p) => p.severity === "error");
+  const warnings = problems.filter((p) => p.severity === "warning");
+  if (warnings.length) {
+    console.log(`\nПредупреждений: ${warnings.length} (прогон не блокируют, но строки стоит перепроверить)`);
+    for (const w of warnings) console.log(`  строка ${w.row}: ${w.message}`);
+  }
+  if (errors.length === 0) {
+    console.log("\nОшибок нет.");
     if (items.length < 20) console.log("Подсказка: для первого отсева нужно хотя бы 20 блюд, для выбора модели — 50+.");
     if (holdout.length < 10) console.log("Подсказка: отложите 10–15 фото (holdout=yes) и не смотрите на них до финальной проверки.");
     return;
   }
-  console.log(`\nПроблем: ${problems.length}`);
-  for (const p of problems) console.log(`  строка ${p.row}: ${p.message}`);
+  console.log(`\nОшибок: ${errors.length}`);
+  for (const p of errors) console.log(`  строка ${p.row}: ${p.message}`);
   process.exit(1);
+}
+
+// ─── import ─────────────────────────────────────────────────────────────────
+/**
+ * Импорт готовой подборки: своя таблица разметки превращается в labels.csv.
+ *
+ * Ожидается папка с `images/` и `dataset.csv` (колонки id, image, complexity,
+ * title_ru, description_ru, portion_weight_g, kcal, protein_g, fat_g, carbs_g).
+ * Обзорные листы (preview*.jpg) не копируются: подавать их модели вместо
+ * исходных фото нельзя.
+ */
+function cmdImport(): void {
+  const from = arg("from");
+  if (!from) {
+    console.error("Укажите папку подборки: eval import --from ../путь/к/распакованному/архиву");
+    process.exit(1);
+  }
+  const src = path.resolve(from);
+  const csvPath = path.join(src, "dataset.csv");
+  if (!existsSync(csvPath)) { console.error(`Не нашёл ${csvPath}`); process.exit(1); }
+
+  const rows = parseCsv(readFileSync(csvPath, "utf-8").replace(/^\uFEFF/, ""));
+  const header = rows[0]!.map((h) => h.trim());
+  const col = (r: string[], name: string) => (r[header.indexOf(name)] ?? "").trim();
+  const need = ["image", "title_ru", "portion_weight_g", "kcal", "protein_g", "fat_g", "carbs_g"];
+  const missing = need.filter((n) => !header.includes(n));
+  if (missing.length) { console.error(`В dataset.csv нет колонок: ${missing.join(", ")}`); process.exit(1); }
+
+  mkdirSync(PHOTOS, { recursive: true });
+  const out: string[] = ["file,dish,grams,kcal,protein,fat,carbs,source,tags,holdout"];
+  const HIDDEN = /масл|соус|сыр|майонез|заправк|сливк|сметан/i;
+  let copied = 0;
+
+  for (const r of rows.slice(1)) {
+    const rel = col(r, "image");
+    if (!rel || /preview/i.test(rel)) continue;
+    const file = path.basename(rel);
+    const srcFile = path.join(src, rel);
+    if (!existsSync(srcFile)) { console.error(`Нет файла ${rel} — пропускаю`); continue; }
+    copyFileSync(srcFile, path.join(PHOTOS, file));
+    copied++;
+
+    const grams = Number(col(r, "portion_weight_g"));
+    const tags = new Set<string>();
+    tags.add(col(r, "complexity") === "complex" ? "mixed" : "simple");
+    if (HIDDEN.test(col(r, "description_ru"))) tags.add("hidden");
+    if (grams > 0 && grams < 150) tags.add("small");
+    if (grams > 400) tags.add("large");
+
+    const round = (v: string) => (Number.isFinite(Number(v)) ? String(Math.round(Number(v) * 10) / 10) : v);
+    const dish = col(r, "title_ru").replace(/"/g, "'");
+    out.push([
+      file, `"${dish}"`, round(col(r, "portion_weight_g")), round(col(r, "kcal")),
+      round(col(r, "protein_g")), round(col(r, "fat_g")), round(col(r, "carbs_g")),
+      `"${(arg("source") ?? "подборка Nutrition5k").replace(/"/g, "'")}"`,
+      [...tags].join(";"), "no"
+    ].join(","));
+  }
+
+  writeFileSync(LABELS, out.join("\n") + "\n", "utf-8");
+  console.log(`Скопировано фото: ${copied}. Таблица: ${path.relative(ROOT, LABELS)}`);
+  console.log("Отложенные фото пока не отмечены: проставьте holdout=yes там, где нужно, или добавьте свои снимки.");
+  console.log("Дальше: pnpm --filter bot-api eval validate");
 }
 
 // ─── scaffold ───────────────────────────────────────────────────────────────
@@ -313,6 +385,7 @@ function cmdScore(): void {
   const input = {
     rows, calls, stored, truths,
     thresholds: cfg.thresholds,
+    weights: cfg.weights,
     baseline: cfg.baseline,
     totalCostUsd: totalCost,
     photosDir: path.relative(dir, photosDir()),
@@ -321,15 +394,16 @@ function cmdScore(): void {
   const md = markdownReport(input);
   writeText(dir, "report.md", md);
   writeJson(dir, "metrics.json", rows);
-  writeText(dir, "misses.html", htmlReport(input, md));
+  writeText(dir, "compare.html", htmlReport(input));
   console.log(md);
   console.log(`\nОтчёт: ${path.relative(ROOT, path.join(dir, "report.md"))}`);
-  console.log(`Промахи с фото: ${path.relative(ROOT, path.join(dir, "misses.html"))}`);
+  console.log(`Сравнение моделей: ${path.relative(ROOT, path.join(dir, "compare.html"))}`);
   if (verdicts.size === 0) console.log("Разметки названий ещё нет — команда label создаст файл для неё.");
 }
 
 // ─── main ───────────────────────────────────────────────────────────────────
 const commands: Record<string, () => void | Promise<void>> = {
+  import: cmdImport,
   scaffold: cmdScaffold,
   validate: cmdValidate,
   prepare: cmdPrepare,
@@ -342,6 +416,7 @@ const command = process.argv[2] ?? "";
 if (!commands[command]) {
   console.log(`Инструменты eval. Команды:
 
+  pnpm eval import --from <папка>    импортировать готовую подборку (images/ + dataset.csv)
   pnpm eval scaffold                 создать строки таблицы по именам файлов в dataset/photos
   pnpm eval validate                 проверить таблицу эталона и фото
   pnpm eval prepare                  привести фото к одному размеру и качеству
