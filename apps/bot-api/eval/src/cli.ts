@@ -2,9 +2,9 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFi
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { callModel } from "./client.js";
-import { loadDataset, parseCsv, type GroundTruth } from "./dataset.js";
+import { loadDataset, parseCsv, selectItems, type GroundTruth } from "./dataset.js";
 import { summarize, type CallRecord, type Truth, type Verdict } from "./metrics.js";
-import { bestPairs, calibrate, confidenceSignal, runsBenefit, splitError } from "./analysis.js";
+import { bestPairs, calibrate, confidenceSignal, priceFrontier, runsBenefit, splitError } from "./analysis.js";
 import { htmlReport, markdownReport } from "./report.js";
 import type { ScoreWeights } from "./scoring.js";
 import { appendCall, doneKeys, readCalls, runDir, writeJson, writeText, type StoredCall } from "./storage.js";
@@ -278,14 +278,31 @@ async function cmdRun(): Promise<void> {
   }
   const all = dataset();
   const holdout = has("holdout");
-  const items = all.filter((i) => i.holdout === holdout);
-  if (items.length === 0) {
+  const pool = all.filter((i) => i.holdout === holdout);
+  if (pool.length === 0) {
     console.error(holdout ? "Отложенных фото нет (holdout=yes)." : "В наборе нет рабочих фото.");
+    process.exit(1);
+  }
+
+  const { selected: items, unknown } = selectItems(pool, {
+    only: arg("only"),
+    limit: arg("limit") ? Number(arg("limit")) : undefined
+  });
+  if (unknown.length) {
+    console.error(`Нет таких фото в наборе: ${unknown.join(", ")}`);
+    process.exit(1);
+  }
+  if (items.length === 0) {
+    console.error("Отбор --only/--limit не оставил ни одного фото.");
     process.exit(1);
   }
 
   const models = (arg("models")?.split(",").map((m) => m.trim()).filter(Boolean)) ?? cfg.models;
   const runs = Number(arg("runs") ?? cfg.runs);
+  // Рассуждающие модели думают дольше флэшевых: без запаса их не измерить,
+  // а таймаут запишется как сбой. Ограничение прода (60 с на Vercel)
+  // применяется при разборе, а не подменяет собой замер.
+  const timeoutSec = Number(arg("timeout") ?? cfg.timeoutSec);
   const dir = arg("out") ? path.resolve(ROOT, arg("out")!) : runDir(RUNS, `${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}${holdout ? "-holdout" : ""}`);
   mkdirSync(dir, { recursive: true });
 
@@ -316,7 +333,7 @@ async function cmdRun(): Promise<void> {
         imagePath: path.join(photos, task.item.file),
         apiKey: key,
         temperature: cfg.temperature,
-        timeoutSec: cfg.timeoutSec,
+        timeoutSec,
         networkRetries: cfg.networkRetries
       });
       spent += outcome.costUsd;
@@ -434,6 +451,30 @@ function cmdAnalyze(): void {
 
   const lines: string[] = ["# Разбор прогона", ""];
 
+  const volume = Number(arg("photos-per-month") ?? 1000);
+  const prices = priceFrontier(
+    models.map((m) => {
+      const s = summarize(m, stored as unknown as CallRecord[], truths);
+      return { model: m, costPerPhotoUsd: s.costPerPhotoUsd, errorPct: s.kcalErrorPctMedian };
+    }),
+    volume
+  );
+  if (prices.length) {
+    lines.push("## Цена против точности");
+    lines.push("");
+    lines.push(`| Модель | Медиана ошибки | $/фото | Дороже дешёвой | $ за пункт точности на 1000 фото | $/мес при ${volume} фото | На границе |`);
+    lines.push("|---|---|---|---|---|---|---|");
+    for (const p of prices) {
+      lines.push(
+        `| ${p.model} | ${p.errorPct}% | $${p.costPerPhotoUsd.toFixed(5)} | ×${p.timesCheapest} | ` +
+        `${p.usdPerPointPer1k === null ? "—" : "$" + p.usdPerPointPer1k} | $${p.costPerMonthUsd} | ${p.onFrontier ? "да" : "нет"} |`
+      );
+    }
+    lines.push("");
+    lines.push("На границе остаются модели, которых никто не обошёл сразу и по цене, и по точности: остальные платить за себя не просят, они просто хуже. Цена пункта считается от самой дешёвой модели прогона — это и есть ответ на вопрос «во что обойдётся точность».");
+    lines.push("");
+  }
+
   lines.push("## Откуда ошибка: вес порции или состав");
   lines.push("");
   lines.push("| Модель | Общая ошибка | Ошибка веса | Ошибка состава | Доля веса в ошибке |");
@@ -517,10 +558,13 @@ if (!commands[command]) {
   pnpm eval scaffold                 создать строки таблицы по именам файлов в dataset/photos
   pnpm eval validate                 проверить таблицу эталона и фото
   pnpm eval prepare                  привести фото к одному размеру и качеству
-  pnpm eval run [--models a,b]       прогон (перезапускаемый), [--runs 3] [--holdout] [--out путь]
+  pnpm eval run [--models a,b]       прогон (перезапускаемый), [--runs 3] [--holdout] [--out runs/имя]
+                                    [--only 008,022] [--limit 20] — зондаж на части набора
+                                    [--timeout 120] — запас времени для рассуждающих моделей
   pnpm eval label [--run папка]      файл для слепой разметки названий блюд
   pnpm eval score [--run папка]      метрики, отсев по порогам, отчёт и страница сравнения
-  pnpm eval analyze [--run папка]    разбор по готовым вызовам: вес против состава, поправка, пары, уверенность
+  pnpm eval analyze [--run папка]    разбор: цена против точности, вес против состава, поправка, пары, уверенность
+                                    [--photos-per-month 1000] — объём для месячного счёта
 
 Порядок: scaffold → validate → prepare → run → label → score.
 Пороги и список моделей — в eval/config.json.`);

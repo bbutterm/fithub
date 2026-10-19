@@ -140,3 +140,43 @@ export function loadDataset(csvPath: string, photosDir: string): LoadedDataset {
 
   return { items, problems };
 }
+
+/**
+ * Отбор подмножества фото для частичного прогона.
+ *
+ * Нужен для зондажа: прежде чем платить за полный прогон новой модели, её
+ * гоняют на двух десятках снимков. Имя принимается и с расширением, и без
+ * него — в разговоре снимки называют «022», а в таблице они «022.jpg».
+ * Непонятые имена возвращаются отдельно: молча прогнать не тот набор хуже,
+ * чем остановиться с ошибкой.
+ */
+export function selectItems(
+  items: GroundTruth[],
+  spec: { only?: string; limit?: number }
+): { selected: GroundTruth[]; unknown: string[] } {
+  const unknown: string[] = [];
+  let selected = items;
+
+  if (spec.only !== undefined) {
+    const byName = new Map<string, GroundTruth>();
+    for (const item of items) {
+      byName.set(item.file.toLowerCase(), item);
+      byName.set(item.file.replace(/\.[^.]+$/, "").toLowerCase(), item);
+    }
+    const picked: GroundTruth[] = [];
+    const seen = new Set<string>();
+    for (const raw of spec.only.split(",").map((s) => s.trim()).filter(Boolean)) {
+      const hit = byName.get(raw.toLowerCase());
+      if (!hit) { unknown.push(raw); continue; }
+      if (seen.has(hit.file)) continue;
+      seen.add(hit.file);
+      picked.push(hit);
+    }
+    selected = picked;
+  }
+
+  if (spec.limit !== undefined && Number.isFinite(spec.limit) && spec.limit > 0) {
+    selected = selected.slice(0, spec.limit);
+  }
+  return { selected, unknown };
+}

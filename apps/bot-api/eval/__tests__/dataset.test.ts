@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadDataset, parseCsv } from "../src/dataset.js";
+import { loadDataset, parseCsv, selectItems, type GroundTruth } from "../src/dataset.js";
 
 const HEADER = "file,dish,grams,kcal,protein,fat,carbs,source,tags,holdout";
 
@@ -86,5 +86,26 @@ describe("проверка набора", () => {
     const { problems } = loadDataset(csv, dir);
     expect(problems).toHaveLength(1);
     expect(problems[0]!.message).toContain("нет колонок");
+  });
+});
+
+describe("selectItems", () => {
+  const items = ["001.jpg", "008.jpg", "022.jpg"].map((file) => ({ file }) as GroundTruth);
+
+  it("без отбора возвращает весь набор, --limit отрезает хвост", () => {
+    expect(selectItems(items, {}).selected).toHaveLength(3);
+    expect(selectItems(items, { limit: 2 }).selected.map((i) => i.file)).toEqual(["001.jpg", "008.jpg"]);
+  });
+
+  it("--only берёт названные фото в заданном порядке, с расширением и без", () => {
+    const { selected, unknown } = selectItems(items, { only: "022, 001.jpg, 022" });
+    expect(selected.map((i) => i.file)).toEqual(["022.jpg", "001.jpg"]);
+    expect(unknown).toEqual([]);
+  });
+
+  it("несуществующее имя возвращается отдельно, а не молча выпадает", () => {
+    const { selected, unknown } = selectItems(items, { only: "008,999" });
+    expect(selected.map((i) => i.file)).toEqual(["008.jpg"]);
+    expect(unknown).toEqual(["999"]);
   });
 });

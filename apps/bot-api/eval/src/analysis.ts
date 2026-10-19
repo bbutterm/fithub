@@ -246,3 +246,61 @@ export function confidenceSignal(model: string, calls: StoredCall[], truths: Tru
     useful: Number.isFinite(errorBelow) && Number.isFinite(errorAbove) && errorBelow > errorAbove * 1.3
   };
 }
+
+export interface PricePoint {
+  model: string;
+  costPerPhotoUsd: number;
+  errorPct: number;
+  /** Нет модели, которая одновременно дешевле и точнее. */
+  onFrontier: boolean;
+  /** Во сколько раз дороже самой дешёвой модели набора. */
+  timesCheapest: number;
+  /**
+   * Сколько долларов на тысячу фото стоит один процентный пункт точности,
+   * выигранный у самой дешёвой модели. Пусто, если модель не точнее её.
+   */
+  usdPerPointPer1k: number | null;
+  /** Счёт за месяц при заданном числе фотографий. */
+  costPerMonthUsd: number;
+}
+
+/**
+ * Цена против точности.
+ *
+ * Балл в сводной таблице смешивает то и другое с произвольными весами, и из
+ * него не видно, за что именно платишь. Здесь обе величины остаются рядом:
+ * граница Парето отсекает модели, которые просто хуже по обоим признакам, а
+ * цена процентного пункта показывает, во что обходится остаток.
+ */
+export function priceFrontier(
+  rows: Array<{ model: string; costPerPhotoUsd: number; errorPct: number }>,
+  photosPerMonth = 1000
+): PricePoint[] {
+  const usable = rows.filter((r) => Number.isFinite(r.costPerPhotoUsd) && Number.isFinite(r.errorPct));
+  if (usable.length === 0) return [];
+
+  const cheapest = usable.reduce((a, b) => (b.costPerPhotoUsd < a.costPerPhotoUsd ? b : a));
+
+  return usable
+    .map((r) => {
+      const better = usable.some(
+        (o) =>
+          o.model !== r.model &&
+          o.costPerPhotoUsd <= r.costPerPhotoUsd &&
+          o.errorPct <= r.errorPct &&
+          (o.costPerPhotoUsd < r.costPerPhotoUsd || o.errorPct < r.errorPct)
+      );
+      const gain = cheapest.errorPct - r.errorPct;
+      const extraPer1k = (r.costPerPhotoUsd - cheapest.costPerPhotoUsd) * 1000;
+      return {
+        model: r.model,
+        costPerPhotoUsd: r.costPerPhotoUsd,
+        errorPct: r1(r.errorPct),
+        onFrontier: !better,
+        timesCheapest: cheapest.costPerPhotoUsd > 0 ? r3(r.costPerPhotoUsd / cheapest.costPerPhotoUsd) : NaN,
+        usdPerPointPer1k: gain > 0 ? r3(extraPer1k / gain) : null,
+        costPerMonthUsd: r3(r.costPerPhotoUsd * photosPerMonth)
+      };
+    })
+    .sort((a, b) => a.errorPct - b.errorPct);
+}

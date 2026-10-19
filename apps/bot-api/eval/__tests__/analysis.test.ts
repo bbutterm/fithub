@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bestPairs, calibrate, confidenceSignal, median, runsBenefit, splitError } from "../src/analysis.js";
+import { bestPairs, calibrate, confidenceSignal, median, priceFrontier, runsBenefit, splitError } from "../src/analysis.js";
 import type { StoredCall } from "../src/storage.js";
 import type { Truth } from "../src/metrics.js";
 
@@ -113,5 +113,36 @@ describe("самооценка модели", () => {
     const calls = [call("m", "a.jpg", 600, 200, 1, 0.9), call("m", "b.jpg", 600, 200, 1, 0.4)];
     const r = confidenceSignal("m", calls, [truth("a.jpg", 500, 200), truth("b.jpg", 500, 200)]);
     expect(r.useful).toBe(false);
+  });
+});
+
+describe("priceFrontier", () => {
+  const rows = [
+    { model: "дешёвая", costPerPhotoUsd: 0.0001, errorPct: 40 },
+    { model: "середина", costPerPhotoUsd: 0.0005, errorPct: 30 },
+    { model: "дорогая", costPerPhotoUsd: 0.006, errorPct: 28 },
+    { model: "хуже по всему", costPerPhotoUsd: 0.002, errorPct: 45 }
+  ];
+
+  it("на границе остаются те, кого никто не обошёл и по цене, и по точности", () => {
+    const byModel = new Map(priceFrontier(rows).map((p) => [p.model, p]));
+    expect(byModel.get("дешёвая")!.onFrontier).toBe(true);
+    expect(byModel.get("середина")!.onFrontier).toBe(true);
+    expect(byModel.get("дорогая")!.onFrontier).toBe(true);
+    expect(byModel.get("хуже по всему")!.onFrontier).toBe(false);
+  });
+
+  it("считает во сколько раз дороже и чего стоит процентный пункт точности", () => {
+    const mid = priceFrontier(rows).find((p) => p.model === "середина")!;
+    expect(mid.timesCheapest).toBe(5);
+    // 0.4$ лишних на тысячу фото за 10 п.п. точности
+    expect(mid.usdPerPointPer1k).toBe(0.04);
+    expect(priceFrontier(rows, 3000).find((p) => p.model === "середина")!.costPerMonthUsd).toBe(1.5);
+  });
+
+  it("у модели не точнее дешёвой цена пункта пустая, а пустой набор не ломает разбор", () => {
+    expect(priceFrontier(rows).find((p) => p.model === "хуже по всему")!.usdPerPointPer1k).toBeNull();
+    expect(priceFrontier([])).toEqual([]);
+    expect(priceFrontier([{ model: "сломалась", costPerPhotoUsd: 0.001, errorPct: NaN }])).toEqual([]);
   });
 });
