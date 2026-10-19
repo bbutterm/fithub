@@ -7,7 +7,7 @@ import { summarize, type CallRecord, type Truth, type Verdict } from "./metrics.
 import { bestPairs, calibrate, confidenceSignal, priceFrontier, runsBenefit, splitError } from "./analysis.js";
 import { htmlReport, markdownReport } from "./report.js";
 import type { ScoreWeights } from "./scoring.js";
-import { appendCall, doneKeys, readCalls, runDir, writeJson, writeText, type StoredCall } from "./storage.js";
+import { appendCall, dedupeCalls, doneKeys, readCalls, runDir, writeJson, writeText, type StoredCall } from "./storage.js";
 
 /**
  * Одна команда на каждый шаг чек-листа. Прогон перезапускаемый: вышла новая
@@ -303,6 +303,9 @@ async function cmdRun(): Promise<void> {
   // а таймаут запишется как сбой. Ограничение прода (60 с на Vercel)
   // применяется при разборе, а не подменяет собой замер.
   const timeoutSec = Number(arg("timeout") ?? cfg.timeoutSec);
+  // Параллельность задаётся на запуск: замер времени требует одного запроса
+  // за раз, а добор недостающих вызовов — не упереться в лимит кредитов.
+  const concurrency = Math.max(1, Number(arg("concurrency") ?? cfg.concurrency));
   const dir = arg("out") ? path.resolve(ROOT, arg("out")!) : runDir(RUNS, `${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}${holdout ? "-holdout" : ""}`);
   mkdirSync(dir, { recursive: true });
 
@@ -349,7 +352,7 @@ async function cmdRun(): Promise<void> {
       process.stdout.write(`\r[${done}/${tasks.length + done}] ${task.model} ${task.item.file} ${mark}   `);
     }
   };
-  await Promise.all(Array.from({ length: Math.max(1, cfg.concurrency) }, worker));
+  await Promise.all(Array.from({ length: concurrency }, worker));
   console.log(`\nГотово. Потрачено примерно $${spent.toFixed(4)}. Папка прогона: ${path.relative(ROOT, dir)}`);
   console.log(`Дальше: pnpm eval score --run ${path.relative(ROOT, dir)}`);
 }
@@ -357,7 +360,7 @@ async function cmdRun(): Promise<void> {
 // ─── label ──────────────────────────────────────────────────────────────────
 function cmdLabel(): void {
   const dir = arg("run") ? resolveRun(arg("run")!) : latestRun();
-  const stored = readCalls(dir).filter((c) => c.ok);
+  const stored = dedupeCalls(readCalls(dir)).filter((c) => c.ok);
   if (stored.length === 0) { console.error("В прогоне нет разобранных ответов."); process.exit(1); }
   const items = dataset();
   const byFile = new Map(items.map((i) => [i.file, i]));
@@ -407,7 +410,7 @@ function readVerdicts(dir: string): Map<string, Verdict> {
 function cmdScore(): void {
   const cfg = config();
   const dir = arg("run") ? resolveRun(arg("run")!) : latestRun();
-  const stored = readCalls(dir);
+  const stored = dedupeCalls(readCalls(dir));
   if (stored.length === 0) { console.error("В прогоне нет вызовов."); process.exit(1); }
   const snapshot = JSON.parse(readFileSync(path.join(dir, "config-snapshot.json"), "utf-8")) as { holdout?: boolean };
   const items = dataset().filter((i) => i.holdout === Boolean(snapshot.holdout));
@@ -443,7 +446,7 @@ function cmdScore(): void {
  */
 function cmdAnalyze(): void {
   const dir = arg("run") ? resolveRun(arg("run")!) : latestRun();
-  const stored = readCalls(dir);
+  const stored = dedupeCalls(readCalls(dir));
   if (stored.length === 0) { console.error("В прогоне нет вызовов."); process.exit(1); }
   const snapshot = JSON.parse(readFileSync(path.join(dir, "config-snapshot.json"), "utf-8")) as { holdout?: boolean };
   const truths = toTruths(dataset().filter((i) => i.holdout === Boolean(snapshot.holdout)));
@@ -560,7 +563,7 @@ if (!commands[command]) {
   pnpm eval prepare                  привести фото к одному размеру и качеству
   pnpm eval run [--models a,b]       прогон (перезапускаемый), [--runs 3] [--holdout] [--out runs/имя]
                                     [--only 008,022] [--limit 20] — зондаж на части набора
-                                    [--timeout 120] — запас времени для рассуждающих моделей
+                                    [--timeout 120] [--concurrency 1] — запас времени и параллельность
   pnpm eval label [--run папка]      файл для слепой разметки названий блюд
   pnpm eval score [--run папка]      метрики, отсев по порогам, отчёт и страница сравнения
   pnpm eval analyze [--run папка]    разбор: цена против точности, вес против состава, поправка, пары, уверенность
