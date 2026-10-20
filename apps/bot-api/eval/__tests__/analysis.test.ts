@@ -163,6 +163,7 @@ describe("pairedBootstrap", () => {
     expect(r.significant).toBe(true);
     expect(r.ci95[0]).toBeGreaterThan(0);
     expect(r.winRatePct).toBe(100);
+    expect(r.confidencePct).toBe(100);
   });
 
   it("одинаковые модели значимой разницы не дают", () => {
@@ -170,6 +171,20 @@ describe("pairedBootstrap", () => {
     const r = pairedBootstrap("первая", "вторая", same, truths)!;
     expect(r.gapPct).toBe(0);
     expect(r.significant).toBe(false);
+    expect(r.confidencePct).toBe(0);
+  });
+
+  it("по среднему видит хвост промахов, которого медиана не замечает", () => {
+    // Одинаковая медиана, но у «хвостатой» три снимка промахнуты в разы.
+    const tail = files.flatMap((f, i) => [
+      call("ровная", f, 110, 200),
+      call("хвостатая", f, i < 3 ? 400 : 110, 200)
+    ]);
+    const byMedian = pairedBootstrap("ровная", "хвостатая", tail, truths)!;
+    expect(byMedian.gapPct).toBe(0);
+    const byMean = pairedBootstrap("ровная", "хвостатая", tail, truths, { metric: "mean" })!;
+    expect(byMean.better).toBe("ровная");
+    expect(byMean.gapPct).toBeGreaterThan(30);
   });
 
   it("повторяется число в число и отказывается считать по трём снимкам", () => {

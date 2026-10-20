@@ -500,6 +500,14 @@ function cmdAnalyze(): void {
         `${top.ci95[0]}…${top.ci95[1]} п.п. | ${top.winRatePct}% | ${top.significant ? "да" : "нет"} |`
       );
     }
+    const topMean = pairedBootstrap(ranked[0]!, ranked[ranked.length - 1]!, stored, truths, { metric: "mean" });
+    if (topMean) {
+      lines.push(
+        `| ${topMean.better} | ${topMean.worse} | ${topMean.medianBetter}% против ${topMean.medianWorse}% (среднее) | ` +
+        `${topMean.gapPct} п.п. | ${topMean.ci95[0]}…${topMean.ci95[1]} п.п. | ${topMean.winRatePct}% | ` +
+        `${topMean.significant ? "да" : "нет"} |`
+      );
+    }
     lines.push("");
     lines.push("Соседи по таблице сравниваются попарно, последняя строка — лучшая против худшей. Снимки парные: обе модели видели одни и те же, поэтому разброс самих блюд из сравнения уходит. Интервал получен бутстрэпом по снимкам (2000 пересборок, фиксированное зерно). Если он задевает ноль, разницу нельзя отличить от удачной подборки фотографий.");
     lines.push("");

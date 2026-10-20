@@ -306,6 +306,8 @@ export function priceFrontier(
 }
 
 export interface PairedComparison {
+  /** По чему сравнивали: медиана описывает типичный снимок, среднее — с хвостом. */
+  metric: "median" | "mean";
   better: string;
   worse: string;
   /** Сколько снимков обе модели осилили: сравнение идёт только по общим. */
@@ -318,6 +320,12 @@ export interface PairedComparison {
   ci95: [number, number];
   /** Интервал не задевает ноль — разницу нельзя списать на выбор снимков. */
   significant: boolean;
+  /**
+   * Доля пересборок, где лучшая модель осталась впереди. «Значимо/нет» —
+   * порог, а это сама величина уверенности: 93% и 50% одинаково «незначимы»,
+   * но говорят о разном.
+   */
+  confidencePct: number;
   /** Доля снимков, где первая модель ближе к эталону. */
   winRatePct: number;
 }
@@ -347,9 +355,12 @@ export function pairedBootstrap(
   modelB: string,
   calls: StoredCall[],
   truths: Truth[],
-  iterations = 2000,
-  seed = 1
+  options: { iterations?: number; seed?: number; metric?: "median" | "mean" } = {}
 ): PairedComparison | null {
+  const { iterations = 2000, seed = 1, metric = "median" } = options;
+  // Медиана описывает типичный снимок, среднее — вместе с хвостом промахов.
+  // Для продукта важны оба: пользователь живёт в медиане, но помнит хвост.
+  const centre = metric === "mean" ? mean : median;
   const truthByFile = new Map(truths.map((t) => [t.file, t]));
   const a = perPhoto(predictions(modelA, calls));
   const b = perPhoto(predictions(modelB, calls));
@@ -363,8 +374,8 @@ export function pairedBootstrap(
   }
   if (pairs.length < 5) return null;
 
-  const medA = median(pairs.map((p) => p.a));
-  const medB = median(pairs.map((p) => p.b));
+  const medA = centre(pairs.map((p) => p.a));
+  const medB = centre(pairs.map((p) => p.b));
   const [first, second, mFirst, mSecond] =
     medA <= medB ? [modelA, modelB, medA, medB] : [modelB, modelA, medB, medA];
   const sign = medA <= medB ? 1 : -1;
@@ -379,7 +390,7 @@ export function pairedBootstrap(
       sampleA.push(p.a);
       sampleB.push(p.b);
     }
-    diffs.push(sign * (median(sampleB) - median(sampleA)));
+    diffs.push(sign * (centre(sampleB) - centre(sampleA)));
   }
   diffs.sort((x, y) => x - y);
   const at = (q: number) => diffs[Math.min(diffs.length - 1, Math.max(0, Math.floor(q * diffs.length)))]!;
@@ -387,8 +398,10 @@ export function pairedBootstrap(
   const hi = at(0.975);
 
   const wins = pairs.filter((p) => (sign === 1 ? p.a < p.b : p.b < p.a)).length;
+  const ahead = diffs.filter((d) => d > 0).length;
 
   return {
+    metric,
     better: first,
     worse: second,
     photos: pairs.length,
@@ -397,6 +410,7 @@ export function pairedBootstrap(
     gapPct: r1(mSecond - mFirst),
     ci95: [r1(lo), r1(hi)],
     significant: lo > 0,
+    confidencePct: r1((ahead / diffs.length) * 100),
     winRatePct: r1((wins / pairs.length) * 100)
   };
 }
