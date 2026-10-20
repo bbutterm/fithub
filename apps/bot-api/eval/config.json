@@ -12,6 +12,13 @@
     "bytedance-seed/seed-2.0-mini",
     "google/gemini-3.6-flash"
   ],
+  "inboxModels": [
+    "google/gemini-3.6-flash",
+    "google/gemini-3.8-flash",
+    "deepseek/deepseek-v4.1-flash",
+    "qwen/qwen3-vl-235b-a22b-instruct"
+  ],
+  "_inboxModels": "Кого гонять по своим фотографиям: выбранная модель, ближайший конкурент, дешёвый вариант и та, что стоит в боте сейчас. Короткий список — потому что десяток моделей на каждом снимке стоит денег, а различить их на десятке фотографий всё равно нельзя.",
   "baseline": "qwen/qwen3-vl-235b-a22b-instruct",
   "runs": 3,
   "temperature": 0,

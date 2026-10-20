@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { callModel } from "./client.js";
@@ -8,6 +8,7 @@ import { bestPairs, calibrate, confidenceSignal, pairedBootstrap, priceFrontier,
 import { htmlReport, markdownReport } from "./report.js";
 import type { ScoreWeights } from "./scoring.js";
 import { appendCall, dedupeCalls, doneKeys, readCalls, runDir, writeJson, writeText, type StoredCall } from "./storage.js";
+import { agreement, photoConsensus } from "./consensus.js";
 
 /**
  * Одна команда на каждый шаг чек-листа. Прогон перезапускаемый: вышла новая
@@ -24,6 +25,8 @@ const RUNS = path.join(ROOT, "runs");
 
 interface Config {
   models: string[];
+  /** Короткий список для прогонов по своим фотографиям; если пуст — берётся models. */
+  inboxModels?: string[];
   baseline: string;
   runs: number;
   temperature: number;
@@ -118,6 +121,27 @@ function toRecords(stored: StoredCall[]): CallRecord[] {
 
 const toTruths = (items: GroundTruth[]): Truth[] =>
   items.map((i) => ({ file: i.file, grams: i.grams, kcal: i.kcal, protein: i.protein, fat: i.fat, carbs: i.carbs, tags: i.tags }));
+
+type SharpFn = (input: string) => {
+  rotate(): ReturnType<SharpFn>;
+  resize(opts: { width: number; height: number; fit: "inside"; withoutEnlargement: boolean }): ReturnType<SharpFn>;
+  jpeg(opts: { quality: number }): ReturnType<SharpFn>;
+  toFile(out: string): Promise<unknown>;
+};
+
+/**
+ * sharp нужен, чтобы все модели получали снимок одного размера: иначе дороже
+ * обходится не модель, а фотография. Пакет нативный, и на чужой машине его
+ * установка может не пройти — поэтому отсутствие не считается ошибкой само по
+ * себе, решает вызывающая команда.
+ */
+async function loadSharp(): Promise<SharpFn | null> {
+  try {
+    return ((await import("sharp")) as unknown as { default: SharpFn }).default;
+  } catch {
+    return null;
+  }
+}
 
 // ─── validate ───────────────────────────────────────────────────────────────
 function cmdValidate(): void {
@@ -238,16 +262,8 @@ function cmdScaffold(): void {
 // ─── prepare ────────────────────────────────────────────────────────────────
 async function cmdPrepare(): Promise<void> {
   const cfg = config();
-  type SharpFn = (input: string) => {
-    rotate(): ReturnType<SharpFn>;
-    resize(opts: { width: number; height: number; fit: "inside"; withoutEnlargement: boolean }): ReturnType<SharpFn>;
-    jpeg(opts: { quality: number }): ReturnType<SharpFn>;
-    toFile(out: string): Promise<unknown>;
-  };
-  let sharp: SharpFn | null = null;
-  try {
-    sharp = ((await import("sharp")) as unknown as { default: SharpFn }).default;
-  } catch {
+  const sharp = await loadSharp();
+  if (!sharp) {
     console.error(
       "Для приведения фото к одному размеру нужен sharp:\n" +
         "  pnpm --filter bot-api add -D sharp\n" +
@@ -576,6 +592,250 @@ function cmdAnalyze(): void {
   console.log(`\nСохранено: ${path.relative(ROOT, path.join(dir, "analysis.md"))}`);
 }
 
+// ─── inbox ──────────────────────────────────────────────────────────────────
+/**
+ * Прогон по своей папке с фотографиями.
+ *
+ * Отличие от run одно, но важное: эталона может не быть. Человек кидает в
+ * папку снимок обеда и хочет увидеть, что скажут модели; взвешивать каждую
+ * тарелку он не станет. Если рядом лежит labels.csv — считается точность,
+ * если нет — согласие моделей между собой.
+ */
+async function cmdInbox(): Promise<void> {
+  const cfg = config();
+  const key = apiKey();
+  if (!key) {
+    console.error("Нет ключа: задайте VISION_API_KEY в окружении или в apps/bot-api/.env");
+    process.exit(1);
+  }
+
+  const dir = path.resolve(ROOT, arg("dir") ?? "inbox");
+  // Папка может лежать и вне eval: тогда относительный путь выродится
+  // в десяток «..», и в отчёте полезнее абсолютный.
+  const shown = (p: string) => (path.relative(ROOT, p).startsWith("..") ? p : path.relative(ROOT, p));
+  if (!existsSync(dir)) {
+    console.error(`Нет папки ${dir}. Создайте её и положите туда фотографии.`);
+    process.exit(1);
+  }
+  const photos = readdirSync(dir).filter((f) => /\.(jpe?g|png|webp)$/i.test(f)).sort();
+  if (photos.length === 0) {
+    console.error(`В ${shown(dir)} нет фотографий (.jpg, .png, .webp).`);
+    process.exit(1);
+  }
+
+  // Эталон необязателен: без него точность посчитать не из чего, но сравнить
+  // модели между собой всё равно можно.
+  const labelsPath = path.join(dir, "labels.csv");
+  let truths: Truth[] = [];
+  if (existsSync(labelsPath)) {
+    const { items, problems } = loadDataset(labelsPath, dir);
+    const errors = problems.filter((p) => p.severity === "error");
+    if (errors.length) {
+      console.error(`В ${shown(labelsPath)} ошибки:`);
+      for (const p of errors) console.error(`  строка ${p.row}: ${p.message}`);
+      process.exit(1);
+    }
+    for (const p of problems) console.warn(`замечание, строка ${p.row}: ${p.message}`);
+    truths = toTruths(items);
+  }
+
+  const models =
+    (arg("models")?.split(",").map((m) => m.trim()).filter(Boolean)) ??
+    (cfg.inboxModels?.length ? cfg.inboxModels : cfg.models);
+  const runs = Number(arg("runs") ?? 1);
+  const timeoutSec = Number(arg("timeout") ?? cfg.timeoutSec);
+  const concurrency = Math.max(1, Number(arg("concurrency") ?? cfg.concurrency));
+
+  const planned = models.length * photos.length * runs;
+  const maxCalls = Number(arg("max-calls") ?? 400);
+  if (planned > maxCalls) {
+    console.error(
+      `Вышло бы ${planned} вызовов (${photos.length} фото × ${models.length} моделей × ${runs} повторов), ` +
+        `а предел ${maxCalls}. Уберите фотографии, сократите --models или поднимите --max-calls осознанно.`
+    );
+    process.exit(1);
+  }
+
+  const out = arg("out")
+    ? path.resolve(ROOT, arg("out")!)
+    : runDir(RUNS, `inbox-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}`);
+  mkdirSync(out, { recursive: true });
+
+  // Снимок с телефона весит мегабайты, и платить пришлось бы за них, а не за
+  // модель. Ужимаем в папку прогона — оригиналы в inbox остаются нетронутыми.
+  const sharp = await loadSharp();
+  let imagesDir = dir;
+  let resized = false;
+  if (sharp) {
+    imagesDir = path.join(out, "prepared");
+    mkdirSync(imagesDir, { recursive: true });
+    for (const f of photos) {
+      await sharp(path.join(dir, f))
+        .rotate()
+        .resize({ width: cfg.image.maxSide, height: cfg.image.maxSide, fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: cfg.image.quality })
+        .toFile(path.join(imagesDir, f));
+    }
+    resized = true;
+  } else {
+    // Без sharp большой снимок молча утроит счёт, поэтому лучше остановиться.
+    const heavy = photos.filter((f) => statSync(path.join(dir, f)).size > 1_500_000);
+    if (heavy.length && !has("allow-big")) {
+      console.error(
+        `Нет sharp, а эти снимки тяжелее полутора мегабайт: ${heavy.join(", ")}.\n` +
+          "Установите sharp (pnpm --filter bot-api add -D sharp), ужмите фотографии сами " +
+          "или запустите с --allow-big, понимая, что счёт вырастет."
+      );
+      process.exit(1);
+    }
+  }
+
+  writeJson(out, "config-snapshot.json", {
+    models, runs, temperature: cfg.temperature, image: cfg.image, resized,
+    source: shown(dir), withTruth: truths.length > 0, startedAt: new Date().toISOString()
+  });
+
+  const already = doneKeys(readCalls(out));
+  const tasks: Array<{ model: string; file: string; run: number }> = [];
+  for (const model of models) {
+    for (const file of photos) {
+      for (let run = 1; run <= runs; run++) {
+        if (!already.has(`${model}|${file}|${run}`)) tasks.push({ model, file, run });
+      }
+    }
+  }
+
+  console.log(
+    `Прогон по папке ${shown(dir)}: ${photos.length} фото × ${models.length} моделей × ${runs} ` +
+      `= ${planned} вызовов${truths.length ? " (эталон есть)" : " (эталона нет, считаем согласие)"}`
+  );
+
+  let done = 0;
+  let spent = 0;
+  const worker = async () => {
+    for (;;) {
+      const task = tasks.shift();
+      if (!task) return;
+      const outcome = await callModel({
+        model: task.model, imagePath: path.join(imagesDir, task.file), apiKey: key,
+        temperature: cfg.temperature, timeoutSec, networkRetries: cfg.networkRetries
+      });
+      spent += outcome.costUsd;
+      appendCall(out, {
+        model: task.model, file: task.file, run: task.run, at: new Date().toISOString(),
+        ok: outcome.ok, failure: outcome.failure, httpStatus: outcome.httpStatus,
+        latencyMs: outcome.latencyMs, costUsd: outcome.costUsd,
+        promptTokens: outcome.promptTokens, completionTokens: outcome.completionTokens,
+        networkRetries: outcome.networkRetries, parsed: outcome.parsed, raw: outcome.raw
+      });
+      done++;
+      process.stdout.write(`\r[${done}/${tasks.length + done}] ${task.model} ${task.file} ${outcome.ok ? "·" : `✗${outcome.failure}`}   `);
+    }
+  };
+  await Promise.all(Array.from({ length: concurrency }, worker));
+  console.log(`\nГотово. Потрачено примерно $${spent.toFixed(4)}.`);
+
+  const stored = dedupeCalls(readCalls(out));
+  const md = inboxReport(stored, truths, photos.length, models, runs, shown(dir), resized, cfg.image.maxSide);
+  writeText(out, "inbox.md", md);
+  console.log("\n" + md);
+
+  const summary = arg("summary") ?? process.env.GITHUB_STEP_SUMMARY;
+  if (summary) {
+    writeFileSync(summary, md, { flag: "a" });
+    console.log(`\nОтчёт дописан в ${summary}`);
+  }
+  console.log(`Папка прогона: ${path.relative(ROOT, out)}`);
+}
+
+/** Отчёт по своей папке: с эталоном считается точность, без — согласие. */
+function inboxReport(
+  stored: StoredCall[], truths: Truth[], photos: number,
+  models: string[], runs: number, source: string, resized: boolean, maxSide: number
+): string {
+  const spent = stored.reduce((s, c) => s + c.costUsd, 0);
+  const lines: string[] = [
+    `## Прогон по папке \`${source}\``,
+    "",
+    `Фотографий: ${photos} · моделей: ${models.length} · повторов: ${runs} · ` +
+      `вызовов: ${stored.length} · потрачено: $${spent.toFixed(4)}`,
+    "",
+    resized
+      ? `Снимки ужаты до ${maxSide} пикселей по длинной стороне — так же, как основной набор.`
+      : "Снимки отправлены как есть: sharp не установлен, размеры у моделей разные.",
+    ""
+  ];
+
+  if (truths.length) {
+    const records = toRecords(stored);
+    const rows = models
+      .map((m) => summarize(m, records, truths))
+      .sort((a, b) => a.kcalErrorPctMedian - b.kcalErrorPctMedian);
+    lines.push("### Точность по эталону", "");
+    lines.push("| Модель | Медиана ошибки | Среднее | Ошибка веса | Сбои | Ответ | $/фото |");
+    lines.push("|---|---|---|---|---|---|---|");
+    for (const r of rows) {
+      lines.push(
+        `| ${r.model} | ${r.kcalErrorPctMedian}% | ${r.kcalErrorPctMean}% | ${r.gramsErrorPctMean}% | ` +
+          `${r.failureRatePct}% | ${r.latencySecMean} с | $${r.costPerPhotoUsd.toFixed(5)} |`
+      );
+    }
+    lines.push("");
+    if (photos < 20) {
+      lines.push(
+        `> На ${photos} снимках разницу между моделями измерить нельзя: интервал неопределённости ` +
+          "здесь шире любого разрыва в таблице. Эти числа говорят, что произошло на ваших снимках, " +
+          "и не говорят, какая модель лучше вообще."
+      );
+      lines.push("");
+    }
+  }
+
+  const rows = agreement(stored);
+  lines.push(truths.length ? "### Согласие между моделями" : "### Согласие между моделями (эталона нет)", "");
+  lines.push("| Модель | Отклонение от остальных | Смещение | Выше всех | Ниже всех | Сбои | Ответ | $/фото |");
+  lines.push("|---|---|---|---|---|---|---|---|");
+  for (const r of rows) {
+    lines.push(
+      `| ${r.model} | ${r.deviationPctMedian}% | ${r.biasPctMean > 0 ? "+" : ""}${r.biasPctMean}% | ` +
+        `${r.highestCount} | ${r.lowestCount} | ${r.failureRatePct}% | ${r.latencySecMedian} с | ` +
+        `$${r.costPerPhotoUsd.toFixed(5)} |`
+    );
+  }
+  lines.push("");
+  lines.push(
+    "Согласие — это не точность. Модели умеют ошибаться хором: на плотной еде со скрытым жиром " +
+      "занижает весь набор сразу. Таблица отвечает, кто выбивается из общего мнения и в какую сторону, " +
+      "а не кто прав."
+  );
+  lines.push("");
+
+  lines.push("### Что увидели на каждом снимке", "");
+  lines.push("| Снимок | Общее мнение | Разброс | От и до | Названия блюд |");
+  lines.push("|---|---|---|---|---|");
+  for (const p of photoConsensus(stored)) {
+    const truth = truths.find((t) => t.file === p.file);
+    const centre = truth ? `${Math.round(truth.kcal)} ккал (эталон)` : `${p.consensusKcal} ккал`;
+    lines.push(
+      `| ${p.file} | ${centre} | ×${p.spreadRatio} | ${p.minKcal}–${p.maxKcal} | ${p.dishes.slice(0, 3).join(" · ")} |`
+    );
+  }
+  lines.push("");
+  lines.push("Снимки отсортированы по разбросу: сверху те, где модели не сошлись во мнении сильнее всего.");
+  lines.push("");
+
+  const failures = stored.filter((c) => !c.ok);
+  if (failures.length) {
+    lines.push("### Сбои", "");
+    for (const f of failures.slice(0, 12)) {
+      lines.push(`- \`${f.model}\` на ${f.file}: ${f.failure}${f.httpStatus ? ` (HTTP ${f.httpStatus})` : ""}`);
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
 // ─── main ───────────────────────────────────────────────────────────────────
 const commands: Record<string, () => void | Promise<void>> = {
   import: cmdImport,
@@ -583,6 +843,7 @@ const commands: Record<string, () => void | Promise<void>> = {
   validate: cmdValidate,
   prepare: cmdPrepare,
   run: cmdRun,
+  inbox: cmdInbox,
   label: cmdLabel,
   score: cmdScore,
   analyze: cmdAnalyze
@@ -599,6 +860,8 @@ if (!commands[command]) {
   pnpm eval run [--models a,b]       прогон (перезапускаемый), [--runs 3] [--holdout] [--out runs/имя]
                                     [--only 008,022] [--limit 20] — зондаж на части набора
                                     [--timeout 120] [--concurrency 1] — запас времени и параллельность
+  pnpm eval inbox [--dir inbox]     прогон по своей папке с фото, [--models a,b] [--runs 1]
+                                    [--max-calls 400] [--summary файл] — эталон необязателен
   pnpm eval label [--run папка]      файл для слепой разметки названий блюд
   pnpm eval score [--run папка]      метрики, отсев по порогам, отчёт и страница сравнения
   pnpm eval analyze [--run папка]    разбор: цена против точности, вес против состава, поправка, пары, уверенность

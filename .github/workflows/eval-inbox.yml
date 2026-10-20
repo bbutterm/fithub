@@ -1,0 +1,143 @@
+name: Eval по своим фото
+
+# Отложенная проверка моделей на своих снимках: кладёшь фотографии в
+# apps/bot-api/eval/inbox/, пушишь — модели прогоняются на них, отчёт приходит
+# комментарием к коммиту и в сводку запуска.
+#
+# Зачем: набор Nutrition5k, на котором выбиралась модель, снят в студии сверху
+# при ровном свете и лежит в открытом доступе с 2021 года. На снимках с
+# телефона числа будут другими, и узнать насколько можно только так.
+on:
+  push:
+    paths:
+      - "apps/bot-api/eval/inbox/**"
+      - "!apps/bot-api/eval/inbox/README.md"
+  workflow_dispatch:
+    inputs:
+      models:
+        description: "Модели через запятую (пусто — список inboxModels из eval/config.json)"
+        required: false
+        default: ""
+      runs:
+        description: "Повторов на снимок"
+        required: false
+        default: "1"
+      max_calls:
+        description: "Предел вызовов: прогон не начнётся, если выйдет больше"
+        required: false
+        default: "120"
+      dir:
+        description: "Папка с фотографиями относительно apps/bot-api/eval"
+        required: false
+        default: "inbox"
+
+# Прогон стоит денег: два пуша подряд не должны оплачивать одно и то же,
+# и отменять начатый прогон на полпути тоже незачем.
+concurrency:
+  group: eval-inbox-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  inbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Сначала фотографии, потом ключ: если папку просто почистили, запуск
+      # должен тихо закончиться, а не гореть красным из-за ненастроенного
+      # секрета, который в этот раз и не понадобился.
+      - name: Есть ли что прогонять
+        id: photos
+        env:
+          IN_DIR: ${{ inputs.dir || 'inbox' }}
+        run: |
+          DIR="apps/bot-api/eval/$IN_DIR"
+          COUNT=$(find "$DIR" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) 2>/dev/null | wc -l)
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::notice::В $DIR нет фотографий — прогонять нечего."
+          else
+            echo "Фотографий: $COUNT"
+          fi
+
+      - name: Проверить, что ключ задан
+        if: steps.photos.outputs.count != '0'
+        env:
+          KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::Нет секрета OPENROUTER_API_KEY. Settings → Secrets and variables → Actions → New repository secret."
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v4
+        if: steps.photos.outputs.count != '0'
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        if: steps.photos.outputs.count != '0'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+        if: steps.photos.outputs.count != '0'
+
+      # Команда сама ужимает снимки до размера из config.json и кладёт их в
+      # папку прогона: платить за мегапиксели телефонной камеры незачем,
+      # а оригиналы в inbox остаются нетронутыми.
+      - name: Прогон
+        if: steps.photos.outputs.count != '0'
+        working-directory: apps/bot-api
+        env:
+          VISION_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          IN_DIR: ${{ inputs.dir || 'inbox' }}
+          IN_RUNS: ${{ inputs.runs || '1' }}
+          IN_MAX: ${{ inputs.max_calls || '120' }}
+          IN_MODELS: ${{ inputs.models }}
+          RUN_OUT: runs/inbox-${{ github.run_id }}
+        run: |
+          set -- --dir "$IN_DIR" --runs "$IN_RUNS" --max-calls "$IN_MAX" --out "$RUN_OUT"
+          if [ -n "$IN_MODELS" ]; then set -- "$@" --models "$IN_MODELS"; fi
+          pnpm eval inbox "$@"
+
+      # Сырые вызовы и отчёт: хранятся месяц, этого хватает, чтобы вернуться к
+      # спорному снимку и посмотреть, что модель ответила дословно.
+      - name: Сохранить прогон
+        if: always() && steps.photos.outputs.count != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-inbox-${{ github.run_id }}
+          path: apps/bot-api/eval/runs/inbox-${{ github.run_id }}
+          retention-days: 30
+          if-no-files-found: warn
+
+      # В сводку запуска надо заходить руками, а уведомление о комментарии к
+      # коммиту приходит само — в том числе на телефон.
+      - name: Комментарий к коммиту
+        if: github.event_name == 'push' && steps.photos.outputs.count != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const file = `apps/bot-api/eval/runs/inbox-${{ github.run_id }}/inbox.md`;
+            if (!fs.existsSync(file)) {
+              core.notice('Отчёта нет — прогон не дошёл до конца, смотрите лог шага «Прогон».');
+              return;
+            }
+            const body = fs.readFileSync(file, 'utf-8');
+            const limit = 60000;
+            await github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+              body: body.length > limit
+                ? body.slice(0, limit) + '\n\n…обрезано, полный отчёт в артефакте запуска.'
+                : body
+            });
