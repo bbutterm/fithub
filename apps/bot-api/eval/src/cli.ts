@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { callModel } from "./client.js";
 import { loadDataset, parseCsv, selectItems, type GroundTruth } from "./dataset.js";
 import { summarize, type CallRecord, type Truth, type Verdict } from "./metrics.js";
-import { bestPairs, calibrate, confidenceSignal, priceFrontier, runsBenefit, splitError } from "./analysis.js";
+import { bestPairs, calibrate, confidenceSignal, pairedBootstrap, priceFrontier, runsBenefit, splitError } from "./analysis.js";
 import { htmlReport, markdownReport } from "./report.js";
 import type { ScoreWeights } from "./scoring.js";
 import { appendCall, dedupeCalls, doneKeys, readCalls, runDir, writeJson, writeText, type StoredCall } from "./storage.js";
@@ -476,6 +476,32 @@ function cmdAnalyze(): void {
     }
     lines.push("");
     lines.push("На границе остаются модели, которых никто не обошёл сразу и по цене, и по точности: остальные платить за себя не просят, они просто хуже. Цена пункта считается от самой дешёвой модели прогона — это и есть ответ на вопрос «во что обойдётся точность».");
+    lines.push("");
+  }
+
+  const ranked = [...prices].sort((a, b) => a.errorPct - b.errorPct).map((p) => p.model);
+  if (ranked.length > 1) {
+    lines.push("## Значима ли разница");
+    lines.push("");
+    lines.push("| Кто лучше | Кого обошёл | Медианы на общих снимках | Разрыв | 95% интервал | Снимков в пользу лучшей | Значимо |");
+    lines.push("|---|---|---|---|---|---|---|");
+    for (let i = 0; i < ranked.length - 1; i++) {
+      const c = pairedBootstrap(ranked[i]!, ranked[i + 1]!, stored, truths);
+      if (!c) continue;
+      lines.push(
+        `| ${c.better} | ${c.worse} | ${c.medianBetter}% против ${c.medianWorse}% | ${c.gapPct} п.п. | ` +
+        `${c.ci95[0]}…${c.ci95[1]} п.п. | ${c.winRatePct}% | ${c.significant ? "да" : "нет"} |`
+      );
+    }
+    const top = pairedBootstrap(ranked[0]!, ranked[ranked.length - 1]!, stored, truths);
+    if (top) {
+      lines.push(
+        `| ${top.better} | ${top.worse} | ${top.medianBetter}% против ${top.medianWorse}% | ${top.gapPct} п.п. | ` +
+        `${top.ci95[0]}…${top.ci95[1]} п.п. | ${top.winRatePct}% | ${top.significant ? "да" : "нет"} |`
+      );
+    }
+    lines.push("");
+    lines.push("Соседи по таблице сравниваются попарно, последняя строка — лучшая против худшей. Снимки парные: обе модели видели одни и те же, поэтому разброс самих блюд из сравнения уходит. Интервал получен бутстрэпом по снимкам (2000 пересборок, фиксированное зерно). Если он задевает ноль, разницу нельзя отличить от удачной подборки фотографий.");
     lines.push("");
   }
 

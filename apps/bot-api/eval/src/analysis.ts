@@ -304,3 +304,99 @@ export function priceFrontier(
     })
     .sort((a, b) => a.errorPct - b.errorPct);
 }
+
+export interface PairedComparison {
+  better: string;
+  worse: string;
+  /** Сколько снимков обе модели осилили: сравнение идёт только по общим. */
+  photos: number;
+  medianBetter: number;
+  medianWorse: number;
+  /** Насколько медианная ошибка первой модели ниже, в процентных пунктах. */
+  gapPct: number;
+  /** Доверительный интервал разницы, 95%, бутстрэп по снимкам. */
+  ci95: [number, number];
+  /** Интервал не задевает ноль — разницу нельзя списать на выбор снимков. */
+  significant: boolean;
+  /** Доля снимков, где первая модель ближе к эталону. */
+  winRatePct: number;
+}
+
+/** Детерминированный генератор: отчёт должен воспроизводиться число в число. */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * Значима ли разница между двумя моделями.
+ *
+ * Пятьдесят снимков — мало, и разница в несколько процентных пунктов может
+ * оказаться просто удачной подборкой. Бутстрэп пересобирает набор снимков
+ * с возвращением и смотрит, как гуляет разница медиан. Снимки парные: обе
+ * модели видели одни и те же, поэтому в каждой пересборке берутся обе оценки
+ * одного снимка — так из сравнения уходит разброс самих блюд.
+ */
+export function pairedBootstrap(
+  modelA: string,
+  modelB: string,
+  calls: StoredCall[],
+  truths: Truth[],
+  iterations = 2000,
+  seed = 1
+): PairedComparison | null {
+  const truthByFile = new Map(truths.map((t) => [t.file, t]));
+  const a = perPhoto(predictions(modelA, calls));
+  const b = perPhoto(predictions(modelB, calls));
+
+  const pairs: Array<{ a: number; b: number }> = [];
+  for (const [file, predA] of a) {
+    const predB = b.get(file);
+    const truth = truthByFile.get(file);
+    if (!predB || !truth || truth.kcal <= 0) continue;
+    pairs.push({ a: errPct(predA.kcal, truth.kcal), b: errPct(predB.kcal, truth.kcal) });
+  }
+  if (pairs.length < 5) return null;
+
+  const medA = median(pairs.map((p) => p.a));
+  const medB = median(pairs.map((p) => p.b));
+  const [first, second, mFirst, mSecond] =
+    medA <= medB ? [modelA, modelB, medA, medB] : [modelB, modelA, medB, medA];
+  const sign = medA <= medB ? 1 : -1;
+
+  const rnd = mulberry32(seed);
+  const diffs: number[] = [];
+  for (let i = 0; i < iterations; i++) {
+    const sampleA: number[] = [];
+    const sampleB: number[] = [];
+    for (let k = 0; k < pairs.length; k++) {
+      const p = pairs[Math.floor(rnd() * pairs.length)]!;
+      sampleA.push(p.a);
+      sampleB.push(p.b);
+    }
+    diffs.push(sign * (median(sampleB) - median(sampleA)));
+  }
+  diffs.sort((x, y) => x - y);
+  const at = (q: number) => diffs[Math.min(diffs.length - 1, Math.max(0, Math.floor(q * diffs.length)))]!;
+  const lo = at(0.025);
+  const hi = at(0.975);
+
+  const wins = pairs.filter((p) => (sign === 1 ? p.a < p.b : p.b < p.a)).length;
+
+  return {
+    better: first,
+    worse: second,
+    photos: pairs.length,
+    medianBetter: r1(mFirst),
+    medianWorse: r1(mSecond),
+    gapPct: r1(mSecond - mFirst),
+    ci95: [r1(lo), r1(hi)],
+    significant: lo > 0,
+    winRatePct: r1((wins / pairs.length) * 100)
+  };
+}

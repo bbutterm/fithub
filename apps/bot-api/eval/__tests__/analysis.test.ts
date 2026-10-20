@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bestPairs, calibrate, confidenceSignal, median, priceFrontier, runsBenefit, splitError } from "../src/analysis.js";
+import { bestPairs, calibrate, confidenceSignal, median, pairedBootstrap, priceFrontier, runsBenefit, splitError } from "../src/analysis.js";
 import type { StoredCall } from "../src/storage.js";
 import type { Truth } from "../src/metrics.js";
 
@@ -144,5 +144,39 @@ describe("priceFrontier", () => {
     expect(priceFrontier(rows).find((p) => p.model === "хуже по всему")!.usdPerPointPer1k).toBeNull();
     expect(priceFrontier([])).toEqual([]);
     expect(priceFrontier([{ model: "сломалась", costPerPhotoUsd: 0.001, errorPct: NaN }])).toEqual([]);
+  });
+});
+
+describe("pairedBootstrap", () => {
+  const files = Array.from({ length: 20 }, (_, i) => `${i}.jpg`);
+  const truths = files.map((f) => truth(f, 100, 200));
+  // «точная» ошибается на 10%, «грубая» — на 50%, и так на каждом снимке.
+  const calls = files.flatMap((f) => [
+    call("точная", f, 110, 200),
+    call("грубая", f, 150, 200)
+  ]);
+
+  it("устойчивую разницу признаёт значимой и ставит лучшую модель первой", () => {
+    const r = pairedBootstrap("грубая", "точная", calls, truths)!;
+    expect(r.better).toBe("точная");
+    expect(r.gapPct).toBe(40);
+    expect(r.significant).toBe(true);
+    expect(r.ci95[0]).toBeGreaterThan(0);
+    expect(r.winRatePct).toBe(100);
+  });
+
+  it("одинаковые модели значимой разницы не дают", () => {
+    const same = files.flatMap((f) => [call("первая", f, 110, 200), call("вторая", f, 110, 200)]);
+    const r = pairedBootstrap("первая", "вторая", same, truths)!;
+    expect(r.gapPct).toBe(0);
+    expect(r.significant).toBe(false);
+  });
+
+  it("повторяется число в число и отказывается считать по трём снимкам", () => {
+    const a = pairedBootstrap("грубая", "точная", calls, truths)!;
+    const b = pairedBootstrap("грубая", "точная", calls, truths)!;
+    expect(a.ci95).toEqual(b.ci95);
+    const few = calls.filter((c) => Number(c.file.split(".")[0]) < 3);
+    expect(pairedBootstrap("грубая", "точная", few, truths.slice(0, 3))).toBeNull();
   });
 });
